@@ -18,5 +18,5 @@
 Then we have
 
 $$
-\mathbf{B}_{t+1} = \mathbf{B}_t + \begin{bmatrix} -\gamma_b p_{b, t} & -\gamma_g p_{g, t} \\ 1 & 0 \\ 0 & 1  \end{bmatrix} \mathbf{p}_t
+\mathbf{B}_{t+1} = \mathbf{B}_t + \begin{bmatrix} -\gamma_b p_{b, t} & -\gamma_g p_{g, t} \\ 1 & 0 \\ 0 & 1  \end{bmatrix} \mathbf{s}_t
 $$
