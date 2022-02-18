@@ -1,5 +1,6 @@
 import numpy as np
 import csv
+import torch
 
 
 ALPHA_GOLD = 0.01
@@ -8,15 +9,30 @@ DATE_NUM = 1826
 
 
 class Env():
-    def __init__(self):
+    def __init__(self, args, assets, initial_cash, alphas, prices, tradability, device='cuda'):
+        self.device = device
         # date = 1
-        self.btc = 0        # 个
-        self.gold = 0       # 盎司
-        self.money = 1000   # 美元
-        self.value = 1000   # 美元
+        
+        self.args = args
+        self.assets = assets
+        self.alphas = alphas
+        
+        # B x (num_assets + 1)
+        # Index 0 - Balance of cash
+        # Else    - Balance of assets
+        self.portfolio = torch.zeros([args.batch_size, len(assets) + 1], device=device)
+        self.portfolio[:, 0] = initial_cash
+        
+        self.discounts = torch.from_numpy(np.asarray(1 - alphas)).to(device)
+        
+        self.prices = prices
+        self.tradability = tradability
+        
+    def value(self, prices):
+        return 
 
-    def step(self, a, date):
-        with open('data.csv', 'r') as f:
+    def step(self, action, date):
+        with open(self.args.data_path, 'r') as f:
             # date_info = list(csv.reader(f))[date]
 
             file = list(csv.reader(f))
@@ -35,18 +51,26 @@ class Env():
             else: 
                 last_value = 1000        
         
-        self.btc += a[0]
-        self.gold += a[1]
-        self.money = self.money - a[0] * price_btc - a[1] * price_gold
-        self.money = self.money - abs(a[0]) * price_btc * ALPHA_BTC - abs(a[1]) * price_gold * ALPHA_GOLD   # 扣除手续费
-        self.value = self.btc * price_btc + self.gold * price_gold + self.money
+        # Purchasing assets
+        delta_assets = action * self.tradability[:, date]
+        self.portfolio[:, 1:] = self.portfolio + delta_assets
+        # with cash balance and costs of transection
+        self.portfolio[:, 0] = self.portfolio[:, 0] - (1 + delta_assets) * self.discounts
+        
+        # self.value = self.btc * price_btc + self.gold * price_gold + self.money
+        self.value = self.portfolio[:, 0] + (self.portfolio[:, 1:] * self.prices).sum(-1)
 
-        s_ = np.array([self.btc, self.gold, self.money, self.value])
-        r = self.value - last_value
+        next_state = torch.concat([
+            self.portfolio,
+            
+        ])
+        # next_state = np.array([self.btc, self.gold, self.money, self.value])
+        reward = self.value - last_value
         down = True if date == DATE_NUM else False
         info = {}
 
-        return s_, r, down, info
+        return next_state, r, down, info
 
     def reset(self):
-        return np.array([0, 0, 1000, 1000])
+        initial_state = np.array([1000., 0., 0.])
+        return torch.from_numpy(initial_state).to(self.device).unsqueeze(0).tile((self.args.batch_size, 1))

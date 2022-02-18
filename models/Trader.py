@@ -58,16 +58,3 @@ def run_trader(args):
     policy_net = MLPPolicy(output_len=2, num_assets=len(args.assets), seq_feature_len=16)
     pass
 
-def parse_arguments():
-    parser = argparse.ArgumentParser()
-    
-    # Assets
-    parser.add_argument("--assets", default=['btc', 'gold'], type=list, help="Assets available for trading")
-    parser.add_argument("--cost_trans", default={'btc': 0.02, 'gold': 0.01}, type=dict, help="Cost of transection of given assets")
-    parser.add_argument("--initial_cash", default=1000.0, type=float, help="Default amount of cash")
-    
-    return parser.parse_args()
-
-if __name__ == '__main__':
-    args = parse_arguments()
-    pass
