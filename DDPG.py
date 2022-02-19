@@ -228,27 +228,26 @@ def main(args, writer):
             action = torch.clamp(action, -last_portfolio[:, 1:], last_portfolio[:, 0].unsqueeze(-1).tile((1, len(args.assets))) / prices[step] / 2)
             next_state, value, ret = env.step(action, step, last_portfolio, args.seq_len)
             
-            if next_state[:, 0] + 1e-3 < 0:
-                print("Wrong")
             ddpg.store_transition(state, action, value, ret, next_state)
             ep_r += ret
 
             if ddpg.memory_counter > args.memory_capacity:
                 # tqdm.write("Learning from experiences...")
-                args.action_var *= args.var_decay_rate
                 ddpg.learn()
                 
-            if episode > 20:
-                # writer.add_scalars(f"Batch #0, Episode #{ episode }/{ args.episode_len }", {
-                writer.add_scalars(f"Batch #0, Episode #{ episode }/{ args.episode_len }", {
-                    "Cash": next_state[0, 0].detach().cpu(),   
-                    "BTC": next_state[0, 1].detach().cpu(),   
-                    "Gold": next_state[0, 2].detach().cpu(),
-                    "Value": value[0].detach().cpu()
-                }, step)
+            
+            # if episode > 20:
+            #     # writer.add_scalars(f"Batch #0, Episode #{ episode }/{ args.episode_len }", {
+            #     writer.add_scalars(f"Batch #0, Episode #{ episode }/{ args.episode_len }", {
+            #         "Cash": next_state[0, 0].detach().cpu(),   
+            #         "BTC": next_state[0, 1].detach().cpu(),   
+            #         "Gold": next_state[0, 2].detach().cpu(),
+            #         "Value": value[0].detach().cpu()
+            #     }, step)
                 
             state = next_state
-            
+        if episode > 20:   
+            args.action_var *= args.var_decay_rate
         tqdm.write(f"Episode: { episode },  Reward: { ep_r }, Explore: { args.action_var }")
 
 def parse_arguments(agile=False):
@@ -260,32 +259,32 @@ def parse_arguments(agile=False):
     parser.add_argument("--initial_cash", default=1000.0, type=float, help="Default amount of cash")
     
     # Experience Episodes
-    parser.add_argument("--episode_len", default=200, type=int, help="Length of an episode")
+    parser.add_argument("--episode_len", default=2000, type=int, help="Length of an episode")
     parser.add_argument("--episode_steps_range", default=[0, 1826], type=list, help="Range of steps in an episode")
-    parser.add_argument("--memory_capacity", default=1826 * 50, type=int, help="Capacity of memory")
+    parser.add_argument("--memory_capacity", default=1826 * 25, type=int, help="Capacity of memory")
     
     # Actor
     parser.add_argument("--seq_len", default=16, type=int, help="Len of price sequence as part of the state")
     parser.add_argument("--action_var", default=1.0, type=float, help="Var of action noises, will decay through steps")
-    parser.add_argument("--var_decay_rate", default=0.9999, type=float, help="Decay rate of Var of action noises")
+    parser.add_argument("--var_decay_rate", default=0.99, type=float, help="Decay rate of Var of action noises")
     
     # Data
     parser.add_argument("--data_path", default="data/data.csv", type=str, help="Path of data")
     
     # Computation
-    parser.add_argument("--batch_size", default=128, type=int, help="Batch size")
+    parser.add_argument("--batch_size", default=16, type=int, help="Batch size")
     parser.add_argument("--device", default="cuda", type=str, help="Device of computation")
     
     args = parser.parse_args()
     
     if agile:
         args.batch_size = 1
-        args.memory_capacity = 1826 * 20
+        args.memory_capacity = 1826 * 2
         
     return args
 
 
 if __name__ == '__main__':
-    args = parse_arguments(agile=True)
+    args = parse_arguments(agile=False)
     writer = SummaryWriter("runs/")
     main(args, writer)

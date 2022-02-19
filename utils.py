@@ -1,9 +1,31 @@
+import os
+
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import seaborn
 import torch
 from tqdm import tqdm, trange
+
+
+def get_data(args):
+    if not os.path.isfile(args.data_path):
+        raise NotImplementedError()
+    print(f"Reading data from file { args.data_path }")
+    
+    data = pd.read_csv(args.data_path)
+    
+    # num_days x num_assets with prices in USD
+    df = pd.DataFrame(data=data, columns=['btc', 'gold_inter'])
+    prices = torch.from_numpy(df.to_numpy()).float().to(args.device)
+    # num_days x num_assets with {0., 1.}
+    tradability = torch.from_numpy(pd.DataFrame(data=data, columns=['btc_tradable', 'gold_tradable']).to_numpy()).float().to(args.device)
+    
+    print(f"========== Data Loaded ==========")
+    print(df.describe())
+    print(f"Totally { data.shape[0] } days of trade, with { torch.from_numpy(data['gold_tradable'].to_numpy() == False).int().sum().item() } unavailable for gold.")
+    print(f"========== Data Loaded ==========")
+    return prices, tradability
 
 class Trader():
     def __init__(self, device='cuda'):

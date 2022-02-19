@@ -59,4 +59,37 @@ $$
 W(s_t) = c_t + \mathbf{p}_t \cdot \mathbf{a}_t
 $$
 
-The reward 
+The constraint for action $a_t$ is
+
+$$
+s_{t+1} \geq \mathbf{0}
+$$
+
+# Theories
+
+Consider we have prices $p_{b, t}, p_{g, t}$ for BTC and Gold on day $t$, then $\eta_{b, t} = \frac{p_{b, t+1} - p_{b, t}}{p_{b, t}}, \eta_{g, t} = \frac{p_{g, t+1} - p_{g, t}}{p_{g, t}}$.
+
+If we possses $b_t$ BTC and $g_t$ ounces of gold. We buy $\Delta b_t$ (sell $-\Delta b_t$) BTC and use all of them to buy gold. We'll get profit iff
+
+$$
+(b_t + \Delta b_t) p_{b, t} \eta_{b, t} + (g_t - \frac{\Delta b_t p_{b, t}}{p_{g, t}} \gamma_b \gamma_g) p_{g, t} \eta_{g, t} \geq b_t p_{b, t} \eta_{g, t} + g_t p_{g, t} \eta_{g, t}
+$$
+
+i.e.
+
+$$
+\Delta b_t p_{b, t} \eta_{b, t} + \frac{\Delta b_t p_{b, t}}{p_{g, t}} \gamma_b \gamma_g p_{g, t} \eta_{g, t} \geq 0
+$$
+
+When $p_{b, t} \eta_{b, t} +  p_{g, t} \eta_{g, t} \gamma_b \gamma_g > 0$:
+
+$$
+\Delta b_t \geq \frac{1}{p_{b, t} \eta_{b, t} +  p_{g, t} \eta_{g, t} \gamma_b \gamma_g}
+$$
+
+And when $p_{b, t} \eta_{b, t} +  p_{g, t} \eta_{g, t} \gamma_b \gamma_g < 0$:
+
+
+$$
+-\Delta b_t \geq \frac{1}{p_{b, t} \eta_{b, t} +  p_{g, t} \eta_{g, t} \gamma_b \gamma_g}
+$$

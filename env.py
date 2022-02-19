@@ -49,13 +49,11 @@ class Env():
         # Purchasing assets
         # TODO: Discuss about the input of tradability: whether the forward pass of Actor, or here with action given...
         # self.portfolio[:, date, 1:] = self.portfolio[:, date - 1, 1:] + action * (1 - self.alphas)
-        self.portfolio[:, 1:] = last_portfolio[:, 1:] + action * (1 - self.alphas)
+        self.portfolio[:, 1:] = last_portfolio[:, 1:] + action / (1 + self.alphas)
         # with cash balance and costs of transection
         # self.portfolio[:, date, 0] = self.portfolio[:, date - 1, 0] - (action * self.prices[date - 1]).sum(-1)
         self.portfolio[:, 0] = last_portfolio[:, 0] - (action * self.prices[date - 1]).sum(-1)
         
-        if self.portfolio[:, 0] + 1e-3 < 0:
-            print("Wrong")
         # self.value = self.btc * price_btc + self.gold * price_gold + self.money
         value = self.portfolio[:, 0] + (self.portfolio[:, 1:] * self.prices[date - 1]).sum(-1)
 
@@ -65,7 +63,7 @@ class Env():
         next_state = torch.concat([
             self.portfolio,
             prices_seq
-        ],dim=-1)
+        ], dim=-1)
         
         if prices_seq.shape[-1] < seq_len * 2:
             prices_pad = torch.ones([self.args.batch_size, int(seq_len - prices_seq.shape[-1] / 2), 2], device=self.device) * self.prices[-1]
