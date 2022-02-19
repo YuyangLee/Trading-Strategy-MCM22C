@@ -173,7 +173,7 @@ def parse_arguments():
     
     # Trader
     parser.add_argument("--force_retrain", default=False, type=bool, help="Whether or not forcely retrain the agent")
-    parser.add_argument("--consider_tradability", default=False, type=bool, help="Whether or not feed tradability into the network")
+    parser.add_argument("--consider_tradability", default=True, type=bool, help="Whether or not feed tradability into the network")
     parser.add_argument("--seq_encode_mode", default="gru", type=str,
                         help="Mode of encoding price sequence: ['deri-1', 'delta', 'gru']")
     

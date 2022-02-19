@@ -1,4 +1,3 @@
-from msilib import sequence
 import os
 
 import matplotlib.pyplot as plt
@@ -12,7 +11,6 @@ from tqdm import tqdm, trange
 def get_grader_seq_data(filepath, seq_len, device='cuda'):
     # seq_len
     sequence = torch.from_numpy(pd.read_csv(filepath).to_numpy()).to(device)
-    
 
 def seq_slide_select(sequences, batch_size, seq_len, num_assets):
     """
