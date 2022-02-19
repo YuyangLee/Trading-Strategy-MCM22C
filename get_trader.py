@@ -8,10 +8,11 @@ import seaborn
 import torch
 import torch.nn as nn
 
-from models.Trader import Seq2SeqPolicy
+from models.Policy import Seq2SeqPolicy
 from torch.utils.tensorboard import SummaryWriter
 from utils.data import *
 
+# TODO: Fix this...
 def sample_tradability(batch_size, seq_len, num_assets=2, indices=[-1], rate=0.2, device='cuda'):
     tradability = torch.ones([batch_size, num_assets], device=device).float()
     for idx in indices:
@@ -46,10 +47,8 @@ def train(step, pf, price_seq, tradability, net_fn: Seq2SeqPolicy, costs, gamma=
     # B x s x 2, B x s x 3
     sell, buy = net_fn(pf, price_seq, tradability)
     
-    reg_vec = torch.concat([sell, buy], dim=-1).reshape((-1, num_assets * 2 + 1))
-    reg = (reg_vec * (1 - reg_vec)).sum(-1)
-    
-    profit = torch.zeros([batch_size], device=pf.device)
+    # reg_vec = torch.concat([sell, buy], dim=-1).reshape((-1, num_assets * 2 + 1))
+    # reg = (reg_vec * (1 - reg_vec)).sum(-1)
     
     if plot_trade:
         plot = {
@@ -63,6 +62,7 @@ def train(step, pf, price_seq, tradability, net_fn: Seq2SeqPolicy, costs, gamma=
         }
         writer.add_scalars(f"Trade { step }", plot, 0)
     
+    profit = torch.zeros([batch_size], device=pf.device)
     new_pf = pf.clone()
     for date in range(seq_len - 1):
         # Sell

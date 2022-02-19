@@ -12,13 +12,13 @@ def get_grader_seq_data(filepath, seq_len, device='cuda'):
     # seq_len
     sequence = torch.from_numpy(pd.read_csv(filepath).to_numpy()).to(device)
 
-def seq_slide_select(sequences, batch_size, seq_len, num_assets):
+def seq_slide_select(sequences, batch_size, seq_len, require_tradability=False, tradability_assets=None):
     """
     Args:
-        `sequences`: B x seq_len
+        `sequences`: seq_len x num_assets
     """
-    batch_size = sequence.shape[0]
-    len        = sequence.shape[0]
+    len        = sequences.shape[1]
+    num_assets = sequences.shape[2]
     
     start_idx = torch.randint(0, len - seq_len, [batch_size, num_assets], device=sequences.device)
     seqs = torch.zeros([0, seq_len, num_assets], device=sequences.device)
@@ -28,14 +28,24 @@ def seq_slide_select(sequences, batch_size, seq_len, num_assets):
         for asset in range(num_assets):
             seq = torch.concat([
                 seq,
-                sequences[start_idx[batch, asset]:start_idx[batch, asset]+seq_len].unsqueeze(-1),
+                sequences[batch, start_idx[batch, asset]:start_idx[batch, asset]+seq_len, asset].unsqueeze(-1),
             ], dim=-1)
         seqs = torch.concat([
             seqs,
             seq.unsqueeze(0)
         ], dim=0)
         
-    return seqs
+    if require_tradability:
+        tradability = torch.ones_like(seqs)
+        untradable_idx = torch.randint(0, len, [batch_size, int(len * 0.3)], device=sequences.device)
+        for batch in range(batch_size):
+            for idx in tradability_assets:
+                # untradable_idx = torch.randint(0, len, [len * 0.3 * torch.rand((1))], device=device)
+                tradability[batch, untradable_idx[batch], idx] = 0.
+        
+        return seqs, tradability
+    else:
+        return seqs
 
 def get_data(args):
     if not os.path.isfile(args.data_path):

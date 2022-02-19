@@ -2,6 +2,8 @@ import numpy as np
 import csv
 import torch
 
+from utils.data import seq_slide_select
+
 
 ALPHA_GOLD = 0.01
 ALPHA_BTC = 0.02
@@ -9,15 +11,9 @@ DATE_NUM = 1826
 
 
 class Env():
-    def __init__(self, args, alphas, prices, tradability, device='cuda'):
-        self.device = device
-        # date = 1
-        
+    def __init__(self, args, costs, prices, tradability, seq_len, mode='e2e', device='cuda'):
         self.args = args
         self.assets = args.assets
-        self.alphas = alphas
-        
-        num_days = prices.shape[0]
         
         # B x (num_assets + 1)
         # Index 0 - Balance of cash
@@ -27,63 +23,75 @@ class Env():
         self.portfolio = torch.zeros([args.batch_size, len(args.assets) + 1], device=device)
         self.portfolio[:, 0] = args.initial_cash
         
-        self.alphas = torch.from_numpy(np.asarray(alphas)).to(device)
-        
+        self.costs = torch.from_numpy(np.asarray(costs)).to(device)
+        self.seq_len = seq_len
         self.prices = prices
         self.tradability = tradability
+        self.mode = mode
         
-    def step(self, action, step, last_portfolio, seq_len):
+        self.device = device
+        
+    def step(self, step, portfolio, sell, buy):
         """
         Calculate effect of day step (in-out in day (step - 1))
         """
-        date = step + 1
-        # date_info = list(csv.reader(f))[date]
+        num_assets = sell.shape[-1]
+        if self.mode == 'train_from_real':
+            prices = self.train_prices
+            tradab = self.train_tradability
+        elif self.mode == 'e2e':
+            prices = self.prices
+            tradab = self.tradability
+        else:
+            raise NotImplementedError()
 
-        if date > 1: 
-            last_date_prices = self.prices[date - 2]
-            # last_date_value  = (self.portfolio[:, date - 1, 1:] * last_date_prices).sum(-1) + self.portfolio[:, date - 1, 0]
-            last_date_value  = (last_portfolio[:, 1:] * last_date_prices).sum(-1) + self.portfolio[:, 0]
-        else: 
-            last_date_value = self.portfolio[:, 0] * 1. + 0.        
+        init_value = (portfolio[:, 0] + (portfolio[:, 1:] * prices[:, step]).sum(-1)).detach()
         
-        # Purchasing assets
-        # TODO: Discuss about the input of tradability: whether the forward pass of Actor, or here with action given...
-        # self.portfolio[:, date, 1:] = self.portfolio[:, date - 1, 1:] + action * (1 - self.alphas)
-        self.portfolio[:, 1:] = last_portfolio[:, 1:] + action / (1 + self.alphas)
-        # with cash balance and costs of transection
-        # self.portfolio[:, date, 0] = self.portfolio[:, date - 1, 0] - (action * self.prices[date - 1]).sum(-1)
-        self.portfolio[:, 0] = last_portfolio[:, 0] - (action * self.prices[date - 1]).sum(-1)
+        # Sell
+        assets_trade = portfolio[:, 1:] * sell
+        new_cash = portfolio[:, 0] + (assets_trade * tradab[:, step] * (1 - self.costs) * prices[:, step]).sum(-1)
         
-        # self.value = self.btc * price_btc + self.gold * price_gold + self.money
-        value = self.portfolio[:, 0] + (self.portfolio[:, 1:] * self.prices[date - 1]).sum(-1)
-
-        ret = value - last_date_value
-        prices_seq = self.prices[date:date+seq_len].reshape((-1)).unsqueeze(0).tile((self.args.batch_size, 1)).float()
+        # Buy
+        cash_trade = new_cash.unsqueeze(-1).tile((1, num_assets+1)) * buy
+        new_assets = cash_trade[:, 1:] * tradab[:, step] * (1 - self.costs) / prices[:, step] + portfolio[:, 1:] * (1 - sell)
         
-        next_state = torch.concat([
-            self.portfolio,
-            prices_seq
+        portfolio = torch.concat([
+            cash_trade[:, :1],
+            new_assets
         ], dim=-1)
         
-        if prices_seq.shape[-1] < seq_len * 2:
-            prices_pad = torch.ones([self.args.batch_size, int(seq_len - prices_seq.shape[-1] / 2), 2], device=self.device) * self.prices[-1]
-            prices_pad = prices_pad.reshape((self.args.batch_size, -1))
-            next_state = torch.concat([
-                next_state,
-                prices_pad
-            ],dim=-1)
+        new_value = portfolio[:, 0] + (portfolio[:, 1:] * self.prices[:, step + 1]).sum(-1)
 
-        return next_state, value, ret
+        ret_prices = prices[:, step:step+self.seq_len]
+        ret_tradab = tradab[:, step:step+self.seq_len]
+        
+        return portfolio, new_value - init_value, ret_prices, ret_tradab
 
-    def reset(self, seq_len):
-        initial_state = np.array([1000., 0., 0.])
+    def reset(self, **args):
         
         # B x (num_assets + 1)
-        init_port = torch.from_numpy(initial_state).to(self.device).unsqueeze(0).tile((self.args.batch_size, 1)).float()
-        # B x (2 * deq_len)
-        init_seq = self.prices[:seq_len].reshape((-1)).unsqueeze(0).tile((self.args.batch_size, 1)).float()
+        # B x deq_len x num_assets 
+        if self.mode == 'train_from_real':
+            self.train_prices = seq_slide_select(self.prices, self.args.batch_size, self.seq_len + args['episode_len'], False)
+            self.train_tradability = seq_slide_select(self.tradability, self.args.batch_size, self.seq_len + args['episode_len'], False)
+            
+            initial_state = np.asarray([1000., 0.5, 1.])
+            portfolio = torch.from_numpy(initial_state).to(self.device).unsqueeze(0).tile((self.args.batch_size, 1)).float()
+            portfolio = portfolio * torch.rand(size=portfolio.shape, device=self.device) * 2
+            
+            prices = self.train_prices[:, 0:self.seq_len]
+            tradability = self.train_tradability[:, 0:self.seq_len]
+            
         
-        return torch.concat([
-            init_port,
-            init_seq
-        ], dim=-1)
+        elif self.mode == 'e2e':
+            prices, tradability = self.prices[:, 0:self.seq_len], self.tradability[:, 0:self.seq_len]
+            initial_state = np.asarray([1000., 0., 0.])
+            portfolio = torch.from_numpy(initial_state).to(self.device).unsqueeze(0).tile((self.args.batch_size, 1)).float()
+            
+        elif self.mode == 'trade':
+            pass
+        
+        else:
+            raise NotImplementedError()
+            
+        return portfolio, prices, tradability
