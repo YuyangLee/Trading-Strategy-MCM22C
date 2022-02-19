@@ -12,6 +12,23 @@ from models.Trader import Seq2SeqPolicy
 from torch.utils.tensorboard import SummaryWriter
 from utils.data import *
 
+def sample_tradability(batch_size, seq_len, num_assets=2, indices=[-1], rate=0.2, device='cuda'):
+    tradability = torch.ones([batch_size, num_assets], device=device).float()
+    for idx in indices:
+        untradable_idx = torch.randint(0, len, [len * 0.3], device=device)
+        # untradable_idx = torch.randint(0, len, [len * 0.3 * torch.rand((1))], device=device)
+        tradability[idx, untradable_idx] = 0.
+        
+    return tradability
+    
+def sample_init_pf(batch_size, num_assets=2, ranges=[[0., 200000.], [0., 100.], [0., 2000.]], device='cuda'):
+    ranges =  torch.Tensor(ranges).to(device)
+    ran_len = ranges[:, 1] - ranges[:, 0]
+    init_pf = torch.randint([batch_size, num_assets + 1], device=device)
+    init_pf = init_pf * ran_len - ranges[:, 0]
+    
+    return init_pf.detach()
+
 def train(step, pf, price_seq, tradability, net_fn: Seq2SeqPolicy, costs, gamma=0.99, plot_trade=False, writer=None):
     """
     Args:
@@ -82,11 +99,12 @@ def train(step, pf, price_seq, tradability, net_fn: Seq2SeqPolicy, costs, gamma=
         
     return profit.sum(-1), new_value.sum(-1), reg
 
-def get_trader(args, writer=None):
+def get_trader(args, writer=None): 
     net = Seq2SeqPolicy(num_assets, args.seq_len, consider_tradability=args.consider_tradability, seq_mode=args.seq_encode_mode, device=args.device)
     sd_filename = os.path.join("data", "trader", f"{args.seq_len}_{ args.seq_encode_mode }_{ 'cons' if args.consider_tradability else 'ignr' }.pt")
     
     if args.force_retrain or not os.path.isfile(sd_filename):
+        seq = torch.from_numpy(pd.read_csv(args.seq_file_path).to_numpy()).to(args.device)
         prices, tradability = get_data(args)
         
         num_assets = len(args.assets)
@@ -101,12 +119,16 @@ def get_trader(args, writer=None):
             
             optimizer = torch.optim.Adam(params=net.parameters(), lr=1e-3*(0.999**epoch))
             for step in trange(args.steps):
-                if epoch < 10:
-                    init_pf = torch.zeros([args.batch_size, num_assets + 1], device=args.device).float()
-                    init_pf[..., 0] = args.initial_cash * torch.rand([1], device=args.device).float()
-                else:
-                    init_pf = torch.zeros([args.batch_size, num_assets + 1], device=args.device)
-                    init_pf[:, 0] = args.initial_cash
+                
+                # B x seq_len x num_assets
+                prices = seq_slide_select(seq, args.batch_size, args.seq_len, len(args.assets))
+                # B x (num_assets + 1)
+                init_pf = sample_init_pf(args.batch_size, num_assets, ranges=[[0., 200000.], [0., 100.], [0., 2000.]], device='cuda')
+                tradability = sample_tradability(args.batch_size, args.seq_len, num_assets, indices=[-1], rate=0.2, device='cuda')
+                # Training with real data - not used
+                # init_pf = torch.zeros([args.batch_size, num_assets + 1], device=args.device).float()
+                # init_pf[..., 0] = args.initial_cash * torch.rand([1], device=args.device).float()
+
                 seq_start_idx = torch.randint(0, num_days - args.seq_len, [args.batch_size], device=args.device)
                 price_seq = torch.zeros([0, args.seq_len, num_assets], device=args.device)
                 tdblt_seq = torch.zeros([0, args.seq_len, num_assets], device=args.device)
@@ -166,8 +188,8 @@ def parse_arguments():
     parser.add_argument("--device", default="cuda", type=str, help="Device of computation")
     
     # Debug
+    parser.add_argument("--seq_file_path", default="data/gen_seq.csv", type=str, help="Path of generated sequence file")
     parser.add_argument("--summary_log_dir", default="runs/", type=str, help="Log directory for Tensorboard Summary Writer")
-    
     args = parser.parse_args()
     
     return args

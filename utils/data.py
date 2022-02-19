@@ -1,3 +1,4 @@
+from msilib import sequence
 import os
 
 import matplotlib.pyplot as plt
@@ -7,6 +8,36 @@ import seaborn
 import torch
 from tqdm import tqdm, trange
 
+
+def get_grader_seq_data(filepath, seq_len, device='cuda'):
+    # seq_len
+    sequence = torch.from_numpy(pd.read_csv(filepath).to_numpy()).to(device)
+    
+
+def seq_slide_select(sequences, batch_size, seq_len, num_assets):
+    """
+    Args:
+        `sequences`: B x seq_len
+    """
+    batch_size = sequence.shape[0]
+    len        = sequence.shape[0]
+    
+    start_idx = torch.randint(0, len - seq_len, [batch_size, num_assets], device=sequences.device)
+    seqs = torch.zeros([0, seq_len, num_assets], device=sequences.device)
+    
+    for batch in range(batch_size):
+        seq = torch.zeros([seq_len, 0], device=sequences.device)
+        for asset in range(num_assets):
+            seq = torch.concat([
+                seq,
+                sequences[start_idx[batch, asset]:start_idx[batch, asset]+seq_len].unsqueeze(-1),
+            ], dim=-1)
+        seqs = torch.concat([
+            seqs,
+            seq.unsqueeze(0)
+        ], dim=0)
+        
+    return seqs
 
 def get_data(args):
     if not os.path.isfile(args.data_path):
