@@ -20,3 +20,43 @@ Then we have
 $$
 \mathbf{B}_{t+1} = \mathbf{B}_t + \begin{bmatrix} -\gamma_b p_{b, t} & -\gamma_g p_{g, t} \\ 1 & 0 \\ 0 & 1  \end{bmatrix} \mathbf{s}_t
 $$
+
+# Optimizing Strategy with DRL 
+
+We find the optimized strategy using Deep Reinforcement Learning.
+
+## Formulation
+
+### Environment
+
+Consider $n_a$ types of assets (in the problem $n_a = 2$ for Gold BTC). Their prices at day $t$ are $\mathbf{p}_t \in \R_+^{n_a}$
+
+The state consists of the current balances in the portfolio, as well as the a sequence of prices of the assets in the future:
+
+$$
+s_t = \begin{bmatrix} c_t & \mathbf{a}_t & \phi(\mathbf{p}_{t:t+l}) \end{bmatrix} \in \R_+^{2l + n_a + 1}
+$$
+
+where $\phi(\cdot)$ flattens its input into a $1-$ dimentional vector.
+
+The sequence is predicted with a prices sequence in the past.
+
+The actor determines the action $a_t = \begin{bmatrix} \Delta \mathbf{a}_t \end{bmatrix} \in \R^{2l+3}$ as the trading amount (positive for buying, negative for selling) of the assets, therefore
+
+$$
+s_{t+1} = s_t + \begin{bmatrix} - \gamma^{-1} \cdot \Delta \mathbf{a}_t & \Delta \mathbf{a}_t \end{bmatrix}
+$$
+
+The return of action $a_t$ is computed as
+
+$$
+r_t = W(s_{t+1}) - W(s_t)
+$$
+
+where the wealth function is:
+
+$$
+W(s_t) = c_t + \mathbf{p}_t \cdot \mathbf{a}_t
+$$
+
+The reward 

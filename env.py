@@ -32,7 +32,7 @@ class Env():
         self.prices = prices
         self.tradability = tradability
         
-    def step(self, action, step, last_portfolio):
+    def step(self, action, step, last_portfolio, seq_len):
         """
         Calculate effect of day step (in-out in day (step - 1))
         """
@@ -54,15 +54,38 @@ class Env():
         # self.portfolio[:, date, 0] = self.portfolio[:, date - 1, 0] - (action * self.prices[date - 1]).sum(-1)
         self.portfolio[:, 0] = last_portfolio[:, 0] - (action * self.prices[date - 1]).sum(-1)
         
-        if self.portfolio[:, 0] + 1e-4 < 0:
+        if self.portfolio[:, 0] + 1e-3 < 0:
             print("Wrong")
         # self.value = self.btc * price_btc + self.gold * price_gold + self.money
         value = self.portfolio[:, 0] + (self.portfolio[:, 1:] * self.prices[date - 1]).sum(-1)
 
         ret = value - last_date_value
+        prices_seq = self.prices[date:date+seq_len].reshape((-1)).unsqueeze(0).tile((self.args.batch_size, 1)).float()
+        
+        next_state = torch.concat([
+            self.portfolio,
+            prices_seq
+        ],dim=-1)
+        
+        if prices_seq.shape[-1] < seq_len * 2:
+            prices_pad = torch.ones([self.args.batch_size, int(seq_len - prices_seq.shape[-1] / 2), 2], device=self.device) * self.prices[-1]
+            prices_pad = prices_pad.reshape((self.args.batch_size, -1))
+            next_state = torch.concat([
+                next_state,
+                prices_pad
+            ],dim=-1)
 
-        return self.portfolio, value, ret
+        return next_state, value, ret
 
-    def reset(self):
+    def reset(self, seq_len):
         initial_state = np.array([1000., 0., 0.])
-        return torch.from_numpy(initial_state).to(self.device).unsqueeze(0).tile((self.args.batch_size, 1)).float()
+        
+        # B x (num_assets + 1)
+        init_port = torch.from_numpy(initial_state).to(self.device).unsqueeze(0).tile((self.args.batch_size, 1)).float()
+        # B x (2 * deq_len)
+        init_seq = self.prices[:seq_len].reshape((-1)).unsqueeze(0).tile((self.args.batch_size, 1)).float()
+        
+        return torch.concat([
+            init_port,
+            init_seq
+        ], dim=-1)

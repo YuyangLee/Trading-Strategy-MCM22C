@@ -20,17 +20,18 @@ LR_A = 0.001
 LR_C = 0.002
 GAMMA = 0.9
 TAU = 0.01
-state_len = 4
 
 
 class Actor(nn.Module):
     """
     The Actor Network
     """
-    def __init__(self, num_assets, device='cuda'):
+    def __init__(self, num_assets, seq_len=16, device='cuda'):
         super(Actor, self).__init__()
 
-        state_len = num_assets + 1  # Cash and balances of assets
+        # Cash and balances of assets, with seq_len days of prices in the future
+        state_len = num_assets + 1 + seq_len * num_assets  
+        
         self.fc1 = nn.Linear(state_len, 256).to(device)
         self.fc1.weight.data.normal_(0, 0.1)
 
@@ -56,42 +57,49 @@ class Critic(nn.Module):
     """
     The Critic Network
     """
-    def __init__(self, num_assets, device='cuda'):
+    def __init__(self, num_assets, seq_len=16, device='cuda'):
         super(Critic, self).__init__()
 
-        state_len = num_assets + 1  # Cash and balances of assets
-        self.fc_s = nn.Linear(state_len, 256).to(device)
+        # Cash and balances of assets, with seq_len days of prices in the future
+        state_len = num_assets + 1 + seq_len * num_assets  
+        self.fc_s = nn.Linear(state_len, 128).to(device)
         self.fc_s.weight.data.normal_(0, 0.1)
 
-        self.fc_a = nn.Linear(num_assets, 256).to(device)
+        self.fc_a = nn.Linear(num_assets, 128).to(device)
         self.fc_a.weight.data.normal_(0.,0.1)
+        
+        self.l = nn.Linear(256, 64).to(device)
 
-        self.out = nn.Linear(256, 1).to(device)
+        self.out = nn.Linear(64, 1).to(device)
         self.out.weight.data.normal_(0.,0.1)
         
         self.device = device
 
     def forward(self, s, a):
-        s = self.fc_s(s)
-        a = self.fc_a(a)
-        n = F.relu(s+a)
+        s = torch.relu(self.fc_s(s))
+        a = torch.relu(self.fc_a(a))
+        
+        n = torch.relu(torch.concat([s, a], dim=-1))
+        n = torch.relu(self.l(n))
+        
         q_value = self.out(n)
         return q_value
 
 
 class DDPG(object):
-    def __init__(self, batch_size, num_assets, memory_capacity, device='cuda'):
+    def __init__(self, batch_size, num_assets, memory_capacity, num_replay=32, seq_len=16, device='cuda'):
         self.num_assets = num_assets
-        state_len = num_assets + 1
+        self.state_len = num_assets + 1 + seq_len * num_assets
         self.batch_size = batch_size
+        self.num_replay = num_replay
         
-        self.actor_eval, self.actor_target = Actor(num_assets), Actor(num_assets)
-        self.critic_eval, self.critic_target = Critic(num_assets), Critic(num_assets)
+        self.actor_eval, self.actor_target = Actor(num_assets, args.seq_len), Actor(num_assets, args.seq_len)
+        self.critic_eval, self.critic_target = Critic(num_assets, args.seq_len), Critic(num_assets, args.seq_len)
         
         # Memory of DDPGe
         self.memory_counter = 0 # 统计更新记忆次数
         self.memory_capacity = memory_capacity
-        self.memory = torch.zeros((batch_size, memory_capacity, state_len * 2 + num_assets + 2), device=device) # 记忆库初始化
+        self.memory = torch.zeros((batch_size, memory_capacity, self.state_len * 2 + num_assets + 2), device=device) # 记忆库初始化
         # self.memory = torch.zeros((mem_cap))
 
         # Optimizers
@@ -131,13 +139,12 @@ class DDPG(object):
         else: 
             last_transition = self.memory[:, (self.memory_counter - 1) % self.memory_capacity, :]
             # last_portfolio = last_transition[:, :self.num_assets + 1]
-            last_portfolio = last_transition[:, -(self.num_assets + 1):]
-            last_value = last_transition[:, self.num_assets * 2 + 1]
+            last_state = last_transition[:, -(self.state_len):]
+            last_value = last_transition[:, self.state_len + self.num_assets]
 
-            return last_portfolio, last_value
+            return last_state, last_value
 
     def learn(self):
-        state_len = self.num_assets + 1
         # Updating target network
         for x in self.actor_target.state_dict().keys():
             eval('self.actor_target.' + x + '.data.mul_((1-TAU))')
@@ -147,20 +154,20 @@ class DDPG(object):
             eval('self.critic_target.' + x + '.data.add_(TAU*self.critic_eval.' + x + '.data)')
 
         # sample_index = torch.random.choice(self.memory_capacity, self.memory_capacity)
-        sample_index = torch.randint(0, self.memory_capacity, [self.batch_size * BATCH_SIZE], device=self.device)
+        sample_index = torch.randint(0, self.memory_capacity, [self.batch_size * self.num_replay], device=self.device)
         b_memory = self.memory.reshape((-1, self.memory.shape[-1]))
         b_memory = b_memory[sample_index]
         # (B x BATCH_SIZE) x 10
         
-        b_s  = b_memory[:, :state_len]
-        b_a  = b_memory[:, state_len:state_len + self.num_assets]
-        b_r  = b_memory[:, -state_len - 1: -state_len]
-        b_s_ = b_memory[:, -state_len:]
+        b_s  = b_memory[:, :self.state_len]
+        b_a  = b_memory[:, self.state_len:self.state_len + self.num_assets]
+        b_r  = b_memory[:, -self.state_len - 1: -self.state_len]
+        b_s_ = b_memory[:, -self.state_len:]
 
         # Get action and compute its Q
         a = self.actor_eval(b_s)
         q = self.critic_eval(b_s, a)
-        a_loss = -torch.mean(q)
+        a_loss = - torch.mean(q)
 
         # Update evaluate networks
         self.actor_optimizer.zero_grad()
@@ -209,18 +216,19 @@ def main(args, writer):
             prices=prices, tradability=tradability
         )
         
-        state = env.reset()
+        state = env.reset(args.seq_len)
         ep_r = 0
 
         for step in range(args.episode_steps_range[0], args.episode_steps_range[1]):
             date = step + 1
-            last_portfolio, _ = ddpg.read_last_state(date)
+            last_state, _ = ddpg.read_last_state(date)
+            last_portfolio = last_state[:, :len(args.assets) + 1]
             
             action = ddpg.choose_action(state, tradability[date - 1], args.action_var)
             action = torch.clamp(action, -last_portfolio[:, 1:], last_portfolio[:, 0].unsqueeze(-1).tile((1, len(args.assets))) / prices[step] / 2)
-            next_state, value, ret = env.step(action, step, last_portfolio)
+            next_state, value, ret = env.step(action, step, last_portfolio, args.seq_len)
             
-            if next_state[:, 0] + 1e-4 < 0:
+            if next_state[:, 0] + 1e-3 < 0:
                 print("Wrong")
             ddpg.store_transition(state, action, value, ret, next_state)
             ep_r += ret
@@ -257,7 +265,8 @@ def parse_arguments(agile=False):
     parser.add_argument("--memory_capacity", default=1826 * 50, type=int, help="Capacity of memory")
     
     # Actor
-    parser.add_argument("--action_var", default=0.5, type=float, help="Var of action noises, will decay through steps")
+    parser.add_argument("--seq_len", default=16, type=int, help="Len of price sequence as part of the state")
+    parser.add_argument("--action_var", default=1.0, type=float, help="Var of action noises, will decay through steps")
     parser.add_argument("--var_decay_rate", default=0.9999, type=float, help="Decay rate of Var of action noises")
     
     # Data
