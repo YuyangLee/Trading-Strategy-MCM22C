@@ -7,11 +7,11 @@ import pandas as pd
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm, trange
 
-from env import Env
-from utils import get_data
+from torch.utils.tensorboard import SummaryWriter
+
+from models.DRLEnv import Env
 
 EPISODE = 200
 STEP = 1826
@@ -20,6 +20,7 @@ LR_A = 0.001
 LR_C = 0.002
 GAMMA = 0.9
 TAU = 0.01
+
 
 class Policy(nn.Module):
     """
@@ -32,15 +33,15 @@ class Policy(nn.Module):
         state_len = num_assets + 1 + seq_len * num_assets  
         self.num_assets = num_assets
         
-        self.fc1 = nn.Linear(state_len, 32).to(device)
+        self.fc1 = nn.Linear(state_len, 256).to(device)
         self.fc1.weight.data.normal_(0, 0.1)
 
-        self.out = nn.Linear(32, num_assets).to(device)
+        self.out = nn.Linear(256, num_assets).to(device)
         self.out.weight.data.normal_(0.,0.1)
         
         self.device = device
         
-    def action_bound(self, portfolio, trade, prices):
+    def trade_bound(self, portfolio, trade, prices):
         cash = portfolio[..., 0]
         assets = portfolio[..., 1:]
 
@@ -55,7 +56,7 @@ class Policy(nn.Module):
             output = output * tradability
         # output = output * self.action_bound
         
-        ouput = self.action_bound(state[..., :self.num_assets + 1], output, prices)
+        ouput = self.trade_bound(state[..., :self.num_assets + 1], output, prices)
         return output
 
 
@@ -135,7 +136,22 @@ class DPG(object):
 
 
 def main(args, writer):
-    prices, tradability = get_data(args)
+    if not os.path.isfile(args.data_path):
+        raise NotImplementedError()
+    print(f"Reading data from file { args.data_path }")
+    
+    data = pd.read_csv(args.data_path)
+    
+    # num_days x num_assets with prices in USD
+    df = pd.DataFrame(data=data, columns=['btc', 'gold_inter'])
+    prices = torch.from_numpy(df.to_numpy()).float().to(args.device)
+    # num_days x num_assets with {0., 1.}
+    tradability = torch.from_numpy(pd.DataFrame(data=data, columns=['btc_tradable', 'gold_tradable']).to_numpy()).float().to(args.device)
+    
+    print(f"========== Data Loaded ==========")
+    print(df.describe())
+    print(f"Totally { data.shape[0] } days of trade, with { torch.from_numpy(data['gold_tradable'].to_numpy() == False).int().sum().item() } unavailable for gold.")
+    print(f"========== Data Loaded ==========")
     
     dpg = DPG(batch_size=args.batch_size, num_assets=len(args.assets), memory_capacity=args.memory_capacity, device=args.device)
     
@@ -160,8 +176,8 @@ def main(args, writer):
             
             state, value, ret = env.step(action, step, portfolio, args.seq_len)
             
-            # if state[:, 0] + 1e-3 < 0:
-            #     print("Wrong")
+            if state[:, 0] + 1e-3 < 0:
+                print("Wrong")
                 
             # Optimize
             ep_r += ret * ret_discount

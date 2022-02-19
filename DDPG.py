@@ -11,7 +11,7 @@ from tqdm import tqdm, trange
 
 from torch.utils.tensorboard import SummaryWriter
 
-from env import Env
+from models.DRLEnv import Env
 
 EPISODE = 200
 STEP = 1826

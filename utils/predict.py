@@ -226,10 +226,3 @@ def main_HWES():
     # plt.xlim(0, 200)
     plt.legend(loc='upper left', fontsize=8)
     plt.savefig('./fig_HWES')
-
-
-if __name__ == '__main__':
-    main_HWES()
-
-
-

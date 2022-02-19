@@ -3,3 +3,6 @@ testbench/
 
 # Tensorboard logs
 runs/
+
+# Training data
+/data/trader/*

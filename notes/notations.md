@@ -93,3 +93,5 @@ And when $p_{b, t} \eta_{b, t} +  p_{g, t} \eta_{g, t} \gamma_b \gamma_g < 0$:
 $$
 -\Delta b_t \geq \frac{1}{p_{b, t} \eta_{b, t} +  p_{g, t} \eta_{g, t} \gamma_b \gamma_g}
 $$
+
+

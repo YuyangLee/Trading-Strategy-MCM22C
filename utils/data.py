@@ -27,7 +27,10 @@ def get_data(args):
     print(f"========== Data Loaded ==========")
     return prices, tradability
 
-class Trader():
+"""
+Abandoned
+"""
+class TradeComputation():
     def __init__(self, device='cuda'):
         self.device = device
     
