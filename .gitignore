@@ -1,2 +1,5 @@
 # Testbench
 testbench/
+
+# Tensorboard logs
+runs/

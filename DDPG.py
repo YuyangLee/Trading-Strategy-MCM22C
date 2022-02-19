@@ -9,6 +9,8 @@ import torch.nn as nn
 import torch.nn.functional as F
 from tqdm import tqdm, trange
 
+from torch.utils.tensorboard import SummaryWriter
+
 from env import Env
 
 EPISODE = 200
@@ -37,11 +39,15 @@ class Actor(nn.Module):
         
         self.device = device
 
-    def forward(self, input):
-        output = self.fc1(input)
+    def forward(self, state, tradability=None, noise_var=None):
+        output = self.fc1(state)
         output = F.relu(output)
         output = self.out(output)
         output = torch.tanh(output)
+        if noise_var is not None:
+            output = output + torch.normal(0, noise_var, size=output.shape, device=output.device)
+        if tradability is not None:
+            output = output * tradability
         # output = output * self.action_bound
         return output
 
@@ -95,14 +101,14 @@ class DDPG(object):
         
         self.device = device
 
-    def choose_action(self, state):
+    def choose_action(self, state, tradability, action_var):
         """
         Choose action from state
 
         Args:
             `state`: state input, B x state_len
         """
-        action = self.actor_eval(state).detach()
+        action = self.actor_eval(state, tradability, action_var).detach()
         return action
 
     def store_transition(self, state, action, value, reward, next_state):
@@ -124,7 +130,8 @@ class DDPG(object):
             return torch.from_numpy(np.asarray([1000, 0, 0])).unsqueeze(0).tile((self.batch_size, 1)).to(self.device), 1000.
         else: 
             last_transition = self.memory[:, (self.memory_counter - 1) % self.memory_capacity, :]
-            last_portfolio = last_transition[:, :self.num_assets + 1]
+            # last_portfolio = last_transition[:, :self.num_assets + 1]
+            last_portfolio = last_transition[:, -(self.num_assets + 1):]
             last_value = last_transition[:, self.num_assets * 2 + 1]
 
             return last_portfolio, last_value
@@ -173,7 +180,7 @@ class DDPG(object):
         self.critic_optimizer.step()
 
 
-def main(args):
+def main(args, writer):
     if not os.path.isfile(args.data_path):
         raise NotImplementedError()
     print(f"Reading data from file { args.data_path }")
@@ -207,12 +214,14 @@ def main(args):
 
         for step in range(args.episode_steps_range[0], args.episode_steps_range[1]):
             date = step + 1
-            last_portfolio, last_value = ddpg.read_last_state(date)
+            last_portfolio, _ = ddpg.read_last_state(date)
             
-            action = ddpg.choose_action(state)
-            action = action + torch.normal(0., args.action_var, size=action.shape, device=action.device)
-            action = torch.clamp(action, -last_portfolio[:, 1:], last_portfolio[:, 0].unsqueeze(-1).tile((1, len(args.assets))) / prices[step])
-            next_state, value, ret = env.step(action, step)
+            action = ddpg.choose_action(state, tradability[date - 1], args.action_var)
+            action = torch.clamp(action, -last_portfolio[:, 1:], last_portfolio[:, 0].unsqueeze(-1).tile((1, len(args.assets))) / prices[step] / 2)
+            next_state, value, ret = env.step(action, step, last_portfolio)
+            
+            if next_state[:, 0] + 1e-4 < 0:
+                print("Wrong")
             ddpg.store_transition(state, action, value, ret, next_state)
             ep_r += ret
 
@@ -221,7 +230,17 @@ def main(args):
                 args.action_var *= args.var_decay_rate
                 ddpg.learn()
                 
+            if episode > 20:
+                # writer.add_scalars(f"Batch #0, Episode #{ episode }/{ args.episode_len }", {
+                writer.add_scalars(f"Batch #0, Episode #{ episode }/{ args.episode_len }", {
+                    "Cash": next_state[0, 0].detach().cpu(),   
+                    "BTC": next_state[0, 1].detach().cpu(),   
+                    "Gold": next_state[0, 2].detach().cpu(),
+                    "Value": value[0].detach().cpu()
+                }, step)
+                
             state = next_state
+            
         tqdm.write(f"Episode: { episode },  Reward: { ep_r }, Explore: { args.action_var }")
 
 def parse_arguments(agile=False):
@@ -251,13 +270,13 @@ def parse_arguments(agile=False):
     args = parser.parse_args()
     
     if agile:
-        args.batch_size = 8
-        args.memory_capacity = 1826 * 25
+        args.batch_size = 1
+        args.memory_capacity = 1826 * 20
         
     return args
 
 
 if __name__ == '__main__':
     args = parse_arguments(agile=True)
-    
-    main(args)
+    writer = SummaryWriter("runs/")
+    main(args, writer)
