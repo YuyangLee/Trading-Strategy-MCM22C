@@ -37,19 +37,37 @@ class Forecaster():
         if mode == 'gt':
             forecast = truth.clone()
             
-        elif mode == 'stat':
-            # TODO: Implementation by C Zhou
-            # forecast = ...
+        elif mode == 'ema':
             train_btc  = pd.DataFrame(self.data[step - 50 : step+1, 0].to('cpu'))
             train_gold = pd.DataFrame(self.data[step - 50 : step+1, 1].to('cpu'))
             
-            model_fit_btc = ARIMA(train_btc, order=(5, 2, 3)).fit()
-            model_fit_gold = ARIMA(train_gold, order=(5, 2, 3)).fit()
+            model_fit_btc = ExponentialSmoothing(train_btc, trend='add', seasonal=None, damped_trend=False).fit()
+            model_fit_gold = ExponentialSmoothing(train_gold, trend='add', seasonal=None, damped_trend=False).fit()
             fc_btc = torch.tensor(np.array(model_fit_btc.forecast(steps=len-1))).to(self.device)
             fc_btc = torch.concat([self.data[step, 0].unsqueeze(0), fc_btc], dim=-1)
             fc_gold = torch.tensor(np.array(model_fit_gold.forecast(steps=len-1))).to(self.device)
             fc_gold = torch.concat([self.data[step, 1].unsqueeze(0), fc_gold], dim=-1)
-            forecast = torch.concat([fc_btc.unsqueeze(0), fc_gold.unsqueeze(0)], dim=0)
+            forecast = torch.concat([fc_btc.unsqueeze(-1), fc_gold.unsqueeze(-1)], dim=-1)
+            
+        elif mode == 'stat':
+            #ARIMA
+            # train_btc  = pd.DataFrame(self.data[step - 50 : step+1, 0].to('cpu'))
+            # train_gold = pd.DataFrame(self.data[step - 50 : step+1, 1].to('cpu'))
+            
+            # model_fit_btc = ARIMA(train_btc, order=(15, 2, 8)).fit()
+            # model_fit_gold = ARIMA(train_gold, order=(15, 2, 8)).fit()
+            # fc_btc = torch.tensor(np.arrayf(model_fit_btc.forecast(steps=len-1))).to(self.device)
+            # fc_btc = torch.concat([self.data[step, 0].unsqueeze(0), fc_btc], dim=-1)
+            # fc_gold = torch.tensor(np.array(model_fit_gold.forecast(steps=len-1))).to(self.device)
+            # fc_gold = torch.concat([self.data[step, 1].unsqueeze(0), fc_gold], dim=-1)
+            # forecast = torch.concat([fc_btc.unsqueeze(0), fc_gold.unsqueeze(0)], dim=0)
+            
+            #VARIMA
+            train = pd.DataFrame(self.data[step - 50 : step + 1].to('cpu'))
+            model = VARMAX(train, order=(8, 2), trend='ct', measurement_error=True)
+            model_fit = model.fit(maxiter=15)
+            fc = model_fit.forecast(steps=len-1)
+            forecast = torch.concat([self.data[step:step+1], torch.from_numpy(np.array(fc)).to(self.device)], dim=0)
             
         elif mode == 'seq2seq':
             pass
