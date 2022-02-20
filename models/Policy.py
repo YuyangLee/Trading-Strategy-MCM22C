@@ -10,7 +10,7 @@ from tqdm import tqdm, trange
 
 
 class Seq2SeqPolicy(nn.Module):
-    def __init__(self, num_assets, seq_len, regular_input=True, consider_tradability=True, seq_hidden_size=16, output_daily=False, seq_mode='delta', device='cuda'):
+    def __init__(self, num_assets, seq_len, regular_input=True, consider_tradability=True, seq_hidden_size=32, output_daily=False, seq_mode='delta', device='cuda'):
         super(Seq2SeqPolicy, self).__init__()
         
         self.num_assets = num_assets

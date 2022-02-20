@@ -47,23 +47,30 @@ class Env():
 
         init_value = (portfolio[:, 0] + (portfolio[:, 1:] * prices[:, step]).sum(-1)).detach()
         
-        # Sell
-        assets_trade = portfolio[:, 1:] * sell
-        new_cash = portfolio[:, 0] + (assets_trade * tradab[:, step] * (1 - self.costs) * prices[:, step]).sum(-1)
-        
-        # Buy
-        cash_trade = new_cash.unsqueeze(-1).tile((1, num_assets+1)) * buy
-        new_assets = cash_trade[:, 1:] * tradab[:, step] * (1 - self.costs) / prices[:, step] + portfolio[:, 1:] * (1 - sell)
-        
-        portfolio = torch.concat([
-            cash_trade[:, :1],
-            new_assets
-        ], dim=-1)
-        
-        new_value = portfolio[:, 0] + (portfolio[:, 1:] * self.prices[:, step + 1]).sum(-1)
-
-        ret_prices = prices[:, step:step+self.seq_len]
-        ret_tradab = tradab[:, step:step+self.seq_len]
+        for i in range(self.seq_len - 1):
+            # Sell
+            assets_trade = portfolio[:, 1:] * sell[:, i]
+            # assets_trade = portfolio[:, 1:] * sell
+            new_cash = portfolio[:, 0] + (assets_trade * tradab[:, step] * (1 - self.costs) * prices[:, step]).sum(-1)
+            
+            # Buy
+            cash_trade = new_cash.unsqueeze(-1).tile((1, num_assets+1)) * buy
+            # cash_trade = new_cash.unsqueeze(-1).tile((1, num_assets+1)) * buy[:, i]
+            new_assets = cash_trade[:, 1:] * tradab[:, step] * (1 - self.costs) / prices[:, step] + portfolio[:, 1:] * (1 - sell)
+            # new_assets = cash_trade[:, 1:] * tradab[:, step] * (1 - self.costs) / prices[:, step] + portfolio[:, 1:] * (1 - sell[:, i])
+            
+            portfolio = torch.concat([
+                cash_trade[:, :1],
+                new_assets
+            ], dim=-1)
+            
+            new_value = portfolio[:, 0] + (portfolio[:, 1:] * prices[:, step + 1]).sum(-1)
+            
+        i += 1
+        ret_prices = prices[:, step+i:step+i+self.seq_len]
+        ret_tradab = tradab[:, step+i:step+i+self.seq_len]
+        # ret_prices = prices[:, step:step+self.seq_len]
+        # ret_tradab = tradab[:, step:step+self.seq_len]
         
         return portfolio, new_value - init_value, ret_prices, ret_tradab
 
@@ -72,8 +79,8 @@ class Env():
         # B x (num_assets + 1)
         # B x deq_len x num_assets 
         if self.mode == 'train_from_real':
-            self.train_prices = seq_slide_select(self.prices, self.args.batch_size, self.seq_len + args['episode_len'], False)
-            self.train_tradability = seq_slide_select(self.tradability, self.args.batch_size, self.seq_len + args['episode_len'], False)
+            self.train_prices = seq_slide_select(self.prices, self.seq_len + args['episode_len'], False)
+            self.train_tradability = seq_slide_select(self.tradability, self.seq_len + args['episode_len'], False)
             
             initial_state = np.asarray([1000., 0.5, 1.])
             portfolio = torch.from_numpy(initial_state).to(self.device).unsqueeze(0).tile((self.args.batch_size, 1)).float()

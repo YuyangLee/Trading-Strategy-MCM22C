@@ -14,9 +14,9 @@ from utils.data import *
 
 # TODO: Fix this...
 def sample_tradability(batch_size, seq_len, num_assets=2, indices=[-1], rate=0.2, device='cuda'):
-    tradability = torch.ones([batch_size, num_assets], device=device).float()
+    tradability = torch.ones([batch_size, seq_len, num_assets], device=device).float()
     for idx in indices:
-        untradable_idx = torch.randint(0, len, [len * 0.3], device=device)
+        untradable_idx = torch.randint(0, seq_len, [seq_len * 0.3], device=device)
         # untradable_idx = torch.randint(0, len, [len * 0.3 * torch.rand((1))], device=device)
         tradability[idx, untradable_idx] = 0.
         
@@ -25,12 +25,12 @@ def sample_tradability(batch_size, seq_len, num_assets=2, indices=[-1], rate=0.2
 def sample_init_pf(batch_size, num_assets=2, ranges=[[0., 200000.], [0., 100.], [0., 2000.]], device='cuda'):
     ranges =  torch.Tensor(ranges).to(device)
     ran_len = ranges[:, 1] - ranges[:, 0]
-    init_pf = torch.randint([batch_size, num_assets + 1], device=device)
+    init_pf = torch.rand([batch_size, num_assets + 1], device=device)
     init_pf = init_pf * ran_len - ranges[:, 0]
     
     return init_pf.detach()
 
-def train(step, pf, price_seq, tradability, net_fn: Seq2SeqPolicy, costs, gamma=0.99, plot_trade=False, writer=None):
+def run_network(step, pf, price_seq, tradability, net_fn: Seq2SeqPolicy, costs, gamma=0.99, plot_trade=False, ret_pf=False, writer=None):
     """
     Args:
         `portfolio`: B x num_assets
@@ -49,18 +49,6 @@ def train(step, pf, price_seq, tradability, net_fn: Seq2SeqPolicy, costs, gamma=
     
     # reg_vec = torch.concat([sell, buy], dim=-1).reshape((-1, num_assets * 2 + 1))
     # reg = (reg_vec * (1 - reg_vec)).sum(-1)
-    
-    if plot_trade:
-        plot = {
-            "Cash": pf[0, 0].detach().cpu(),
-            "BTC":  pf[0, 1].detach().cpu(),
-            "Gold": pf[0, 2].detach().cpu(),
-            "Price_BTC": price_seq[0, 0, 0].detach().cpu(),
-            "Price_Gold": price_seq[0, 0, 1].detach().cpu(),
-            "Value": init_value[0].detach().cpu(),
-            "Gamma": gamma
-        }
-        writer.add_scalars(f"Trade { step }", plot, 0)
     
     profit = torch.zeros([batch_size], device=pf.device)
     new_pf = pf.clone()
@@ -97,37 +85,103 @@ def train(step, pf, price_seq, tradability, net_fn: Seq2SeqPolicy, costs, gamma=
         
         gamma *= gamma
         
-    return profit.sum(-1), new_value.sum(-1), reg
+    if ret_pf:
+        return profit.sum(-1), new_value.sum(-1), new_pf
+    else:
+        return profit.sum(-1), new_value.sum(-1)
 
-def get_trader(args, writer=None): 
-    net = Seq2SeqPolicy(num_assets, args.seq_len, consider_tradability=args.consider_tradability, seq_mode=args.seq_encode_mode, device=args.device)
-    sd_filename = os.path.join("data", "trader", f"{args.seq_len}_{ args.seq_encode_mode }_{ 'cons' if args.consider_tradability else 'ignr' }.pt")
+def e2e_run(args, net, plot_trade=True, writer=None):
+    prices, tradability = get_data(args.data_path, args.device)
+    
+    batch_size = 1
+    num_assets = len(args.assets)
+    num_days = prices.shape[0]
+    init_value = 1000.
+    
+    prices = torch.concat([prices, prices[-args.seq_len:]], dim=0).unsqueeze(0)
+    tradability = torch.concat([tradability, tradability[-args.seq_len:]], dim=0).unsqueeze(0)
+    
+    costs = torch.from_numpy(np.asarray([args.cost_trans[asset] for asset in args.assets])).to(args.device).unsqueeze(0)
+    
+    net.eval()
+    
+    pf = torch.tensor([1000., 0., 0.]).to(args.device).unsqueeze(0)
+    
+    if args.seq_stripe:
+        for step in tqdm(np.arange(0, num_days, args.seq_len - 1)):
+            _, new_value, pf = run_network(step, pf,
+                                 prices[:, step:step+args.seq_len], tradability[:, step:step+args.seq_len],
+                                 net, costs=costs, gamma=args.profit_discount,
+                                 plot_trade=False, ret_pf=True, writer=writer)
+            tqdm.write(f"Step { step }: value = { new_value.item() }, pf = { pf.detach().cpu().numpy() }")
+        new_value = new_value.sum(-1)
+    else:
+        for step in trange(num_days):
+            sell, buy = net(pf, prices[:, step:step+args.seq_len], tradability[:, step:step+args.seq_len])
+            # Sell
+            assets_trade = pf[:, 1:] * sell[:, 0]
+            new_cash = pf[:, 0] + (assets_trade * tradability[:, step] * (1 - costs) * prices[:, step]).sum(-1)
+            
+            # Buy
+            cash_trade = new_cash.unsqueeze(-1).tile((1, num_assets+1)) * buy[:, 0]
+            new_assets = cash_trade[:, 1:] * tradability[:, step] * (1 - costs) / prices[:, step] + pf[:, 1:] * (1 - sell[:, 0])
+            
+            pf = torch.concat([
+                cash_trade[:, :1],
+                new_assets
+            ], dim=-1)
+            
+            new_value = (pf[:, 0] + (pf[:, 1:] * prices[:, step + 1]).sum(-1))
+            
+            if plot_trade:
+                plot = {
+                    "Cash": cash_trade[0, 0].detach().cpu(),
+                    "BTC":  pf[0, 1].detach().cpu(),
+                    "Gold": pf[0, 2].detach().cpu(),
+                    "Price_BTC": prices[0, step, 0].detach().cpu(),
+                    "Price_Gold": prices[0, step, 1].detach().cpu(),
+                    "Value": new_value[0].detach().cpu()
+                }
+                writer.add_scalars(f"Trade { step }", plot, step + 1)
+            tqdm.write(f"Step { step }: value = { new_value[0].item() }, pf = { pf.detach().cpu().numpy() }")
+        new_value = new_value[0]
+    
+    new_value = new_value.detach().cpu().item()
+    print(f"""
+========== Evaluation ==========
+Value:  { init_value } -> { new_value }
+Profit: { (new_value - init_value) / init_value * 100 }%
+================================
+          """)
+        
+def get(args, writer=None): 
+    net = Seq2SeqPolicy(len(args.assets), args.seq_len, consider_tradability=args.consider_tradability, seq_mode=args.seq_encode_mode, output_daily=args.output_daily, device=args.device)
+    sd_filename = os.path.join("data", "trader", f"{args.seq_len}_{ args.seq_encode_mode }_{ 'cons' if args.consider_tradability else 'ignr' }_{ args.epoch }.pt")
     
     if args.force_retrain or not os.path.isfile(sd_filename):
-        seq = torch.from_numpy(pd.read_csv(args.seq_file_path).to_numpy()).to(args.device)
-        prices, tradability = get_data(args)
+        # seq = torch.from_numpy(pd.read_csv(args.seq_file_path).to_numpy()).to(args.device).unsqueeze(0).tile((args.batch_size, 1, 1))
+        
+        prices, tradability = get_data(args.data_path, args.device)
         
         num_assets = len(args.assets)
         num_days = prices.shape[0]
         
         net.train()
         
+        costs = torch.from_numpy(np.asarray([args.cost_trans[asset] for asset in args.assets])).to(args.device).unsqueeze(0)
         for epoch in range(args.epoch):
             prof_mean = 0
             val_mean  = 0
-            costs = torch.from_numpy(np.asarray([args.cost_trans[asset] for asset in args.assets])).to(args.device).unsqueeze(0)
             
             optimizer = torch.optim.Adam(params=net.parameters(), lr=1e-3*(0.999**epoch))
             for step in trange(args.steps):
-                
                 # B x seq_len x num_assets
-                prices = seq_slide_select(seq, args.batch_size, args.seq_len, len(args.assets))
+                # prices, tradability = seq_slide_select(seq, args.batch_size, args.seq_len, len(args.assets), require_tradability=True, tradability_assets=[-1])
                 # B x (num_assets + 1)
-                init_pf = sample_init_pf(args.batch_size, num_assets, ranges=[[0., 200000.], [0., 100.], [0., 2000.]], device='cuda')
-                tradability = sample_tradability(args.batch_size, args.seq_len, num_assets, indices=[-1], rate=0.2, device='cuda')
+                init_pf = sample_init_pf(args.batch_size, num_assets, ranges=[[0., 20000.], [0., 10.], [0., 200.]], device='cuda')
                 # Training with real data - not used
-                # init_pf = torch.zeros([args.batch_size, num_assets + 1], device=args.device).float()
-                # init_pf[..., 0] = args.initial_cash * torch.rand([1], device=args.device).float()
+                # init_pf = torch.rand([args.batch_size, num_assets + 1], device=args.device).float()
+                # init_pf[..., 0] = args.initial_cash * torch.rand([1], device=args.device).float() * 100
 
                 seq_start_idx = torch.randint(0, num_days - args.seq_len, [args.batch_size], device=args.device)
                 price_seq = torch.zeros([0, args.seq_len, num_assets], device=args.device)
@@ -140,7 +194,7 @@ def get_trader(args, writer=None):
                 # price_seq = prices[step:step+args.seq_len].unsqueeze(0).tile((args.batch_size, 1, 1))
                 # tdblt_seq = tradability[step:step+args.seq_len].unsqueeze(0).tile((args.batch_size, 1, 1))
                 
-                profit, value, reg = train(step, init_pf, price_seq, tdblt_seq, net, costs=costs, gamma=args.profit_discount, plot_trade=False, writer=writer)
+                profit, value = run_network(step, init_pf, price_seq, tdblt_seq, net, costs=costs, gamma=args.profit_discount, plot_trade=False, writer=writer)
                 
                 optimizer.zero_grad()
                 loss = - profit
@@ -156,7 +210,7 @@ def get_trader(args, writer=None):
         
             tqdm.write(f"Epoch #{ epoch }: Ave. profit { ( prof_mean / args.steps ).item() } Ave. value { ( val_mean / args.steps ).item() }")
             
-        torch.save(net.state_dict, sd_filename)
+        torch.save(net.state_dict(), sd_filename)
     else:
         net.load_state_dict(torch.load(sd_filename))
         
@@ -169,33 +223,58 @@ def parse_arguments():
     parser.add_argument("--assets", default=['btc', 'gold'], type=list, help="Assets available for trading")
     parser.add_argument("--cost_trans", default={'btc': 0.02, 'gold': 0.01}, type=dict, help="Cost of transection of given assets")
     parser.add_argument("--initial_cash", default=1000.0, type=float, help="Default amount of cash")
-    parser.add_argument("--profit_discount", default=0.95, type=float, help="Discount of profit computation")
+    parser.add_argument("--profit_discount", default=0.98, type=float, help="Discount of profit computation")
     
     # Trader
+    parser.add_argument("--output_daily", default=False, type=bool, help="Whether or not only predict daily action")
     parser.add_argument("--force_retrain", default=False, type=bool, help="Whether or not forcely retrain the agent")
-    parser.add_argument("--consider_tradability", default=True, type=bool, help="Whether or not feed tradability into the network")
-    parser.add_argument("--seq_encode_mode", default="gru", type=str,
+    parser.add_argument("--consider_tradability", default=False, type=bool, help="Whether or not feed tradability into the network")
+    parser.add_argument("--seq_encode_mode", default="delta", type=str,
                         help="Mode of encoding price sequence: ['deri-1', 'delta', 'gru']")
     
+    # E2E Trading
+    parser.add_argument("--seq_stripe", default=False, type=bool, help="Whether or not use seq_len as action stripe size")
+    
     # Data
-    parser.add_argument("--seq_len", default=16, type=int, help="Length of sequence")
+    parser.add_argument("--seq_len", default=32, type=int, help="Length of sequence")
     parser.add_argument("--data_path", default="data/data.csv", type=str, help="Path of data")
     
     # Computation
-    parser.add_argument("--epoch", default=40, type=int, help="Epochs")
-    parser.add_argument("--batch_size", default=8, type=int, help="Batch size")
-    parser.add_argument("--steps", default=512, type=int, help="Batch size")
+    parser.add_argument("--epoch", default=20, type=int, help="Epochs")
+    parser.add_argument("--batch_size", default=4, type=int, help="Batch size")
+    parser.add_argument("--steps", default=256, type=int, help="Batch size")
     parser.add_argument("--device", default="cuda", type=str, help="Device of computation")
     
     # Debug
-    parser.add_argument("--seq_file_path", default="data/gen_seq.csv", type=str, help="Path of generated sequence file")
+    parser.add_argument("--seq_file_path", default="data/seq_gen.csv", type=str, help="Path of generated sequence file")
     parser.add_argument("--summary_log_dir", default="runs/", type=str, help="Log directory for Tensorboard Summary Writer")
     args = parser.parse_args()
     
     return args
 
+def get_trader(assets, cost_trans, seq_len, consider_tradability=False, output_daily=False, seq_mode='delta', device='cuda'):
+    args = parse_arguments()
+    
+    args.assets = assets
+    args.cost_trans = cost_trans
+    args.output_daily = output_daily
+    args.seq_encode_mode = seq_mode
+    args.seq_len = seq_len
+    args.consider_tradability = consider_tradability
+    args.device = device
+    
+    # writer = SummaryWriter(args.summary_log_dir)
+    return get(args)
+
+
 if __name__ == '__main__':
     args = parse_arguments()
-    writer = SummaryWriter(args.summary_log_dir)
-    get_trader(args, writer)
+    
+    args.seq_stripe = False
+    
+    writer=SummaryWriter(args.summary_log_dir)
+    net = get(args, writer)
+    
+    with torch.no_grad():
+        e2e_run(args, net, plot_trade=True, writer=writer)
     

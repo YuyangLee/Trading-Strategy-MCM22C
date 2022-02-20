@@ -5,4 +5,10 @@ testbench/
 runs/
 
 # Training data
-/data/trader/*
+data/trader/*
+
+# Thirdparty libs
+thirdparty/*
+
+# Nohup output
+nohup.out

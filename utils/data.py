@@ -8,15 +8,25 @@ import torch
 from tqdm import tqdm, trange
 
 
-def get_grader_seq_data(filepath, seq_len, device='cuda'):
-    # seq_len
-    sequence = torch.from_numpy(pd.read_csv(filepath).to_numpy()).to(device)
+def get_seq_gen(device='cuda'):
+    return torch.from_numpy(pd.read_csv("data/seq_gen.csv").to_numpy().transpose((-1, -2)))[1].to(device)
 
-def seq_slide_select(sequences, batch_size, seq_len, require_tradability=False, tradability_assets=None):
+# def price_tradability_seq_from_seq_gen(num_assets, seq_len, tradability_assets=None, device='cuda'):
+#     num_assets = 
+    
+#     seqs = get_seq_gen(device=device).unsqueeze(0).unsqueeze(-1).tile((batch_size, -1, num_assets))
+#     return seq_slide_select(seqs, seq_len, require_tradability=True, tradability_assets=tradability_assets)
+    
+# def get_grader_seq_data(filepath, seq_len, device='cuda'):
+#     # seq_len
+#     sequence = torch.from_numpy(pd.read_csv(filepath).to_numpy()).to(device)
+
+def seq_slide_select(sequences, seq_len, require_tradability=False, tradability_assets=None):
     """
     Args:
-        `sequences`: seq_len x num_assets
+        `sequences`: B x seq_len x num_assets
     """
+    batch_size = sequences.shape[0]
     len        = sequences.shape[1]
     num_assets = sequences.shape[2]
     
@@ -47,18 +57,18 @@ def seq_slide_select(sequences, batch_size, seq_len, require_tradability=False, 
     else:
         return seqs
 
-def get_data(args):
-    if not os.path.isfile(args.data_path):
+def get_data(data_path, device):
+    if not os.path.isfile(data_path):
         raise NotImplementedError()
-    print(f"Reading data from file { args.data_path }")
+    print(f"Reading data from file { data_path }")
     
-    data = pd.read_csv(args.data_path)
+    data = pd.read_csv(data_path)
     
     # num_days x num_assets with prices in USD
     df = pd.DataFrame(data=data, columns=['btc', 'gold_inter'])
-    prices = torch.from_numpy(df.to_numpy()).float().to(args.device)
+    prices = torch.from_numpy(df.to_numpy()).float().to(device)
     # num_days x num_assets with {0., 1.}
-    tradability = torch.from_numpy(pd.DataFrame(data=data, columns=['btc_tradable', 'gold_tradable']).to_numpy()).float().to(args.device)
+    tradability = torch.from_numpy(pd.DataFrame(data=data, columns=['btc_tradable', 'gold_tradable']).to_numpy()).float().to(device)
     
     print(f"========== Data Loaded ==========")
     print(df.describe())
