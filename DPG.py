@@ -141,12 +141,12 @@ def main(args, writer):
         #             portfolio_test, ret_test, prices_test, tradability_test = test_env.step(step_test, portfolio_test, buy_test, sell_test)
         #     tqdm.write(f"Test: Total profit { ret_test }")
 
-        reward = (new_value - init_value).sum(-1)
+        reward = (new_value - init_value)
 
-        dpg.optimizer.zero_grad()
-        loss = - reward
-        loss.backward()
-        dpg.optimizer.step()
+        # dpg.optimizer.zero_grad()
+        # loss = - reward.sum(-1) + reward.mean() / reward.std()
+        # loss.backward()
+        # dpg.optimizer.step()
         lr = dpg.lr_decay()
 
 
@@ -188,7 +188,7 @@ def parse_arguments(agile=False):
 
     # Data
     
-    parser.add_argument("--sd_path", default="data/trader/32_delta_ignr_40.pt",
+    parser.add_argument("--sd_path", default="data/trader/16_delta_ignr_40.pt",
                         type=str, help="Path of state dict data fro traid trader")
     parser.add_argument("--data_path", default="data/data.csv",
                         type=str, help="Path of data")

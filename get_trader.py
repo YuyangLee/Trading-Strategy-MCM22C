@@ -7,18 +7,19 @@ import pandas as pd
 import seaborn
 import torch
 import torch.nn as nn
+from models.Forecaster import Forecaster
 
 from models.Policy import Seq2SeqPolicy
 from torch.utils.tensorboard import SummaryWriter
 from utils.data import *
 
 # TODO: Fix this...
-def sample_tradability(batch_size, seq_len, num_assets=2, indices=[-1], rate=0.2, device='cuda'):
-    tradability = torch.ones([batch_size, seq_len, num_assets], device=device).float()
+def sample_tradability(seq_len, num_assets=2, indices=[-1], rate=0.2, device='cuda'):
+    tradability = torch.ones([seq_len, num_assets], device=device).float()
     for idx in indices:
-        untradable_idx = torch.randint(0, seq_len, [seq_len * 0.3], device=device)
+        untradable_idx = torch.randint(0, seq_len, [int(seq_len * 0.3)], device=device)
         # untradable_idx = torch.randint(0, len, [len * 0.3 * torch.rand((1))], device=device)
-        tradability[idx, untradable_idx] = 0.
+        tradability[untradable_idx, idx] = 0.
         
     return tradability
     
@@ -30,22 +31,23 @@ def sample_init_pf(batch_size, num_assets=2, ranges=[[0., 200000.], [0., 100.], 
     
     return init_pf.detach()
 
-def run_network(step, pf, price_seq, tradability, net_fn: Seq2SeqPolicy, costs, gamma=0.99, plot_trade=False, ret_pf=False, writer=None):
+def run_network(step, pf, prices_fc, prices_gt, tradability, net_fn: Seq2SeqPolicy, costs, gamma=0.99, plot_trade=False, ret_pf=False, writer=None):
     """
     Args:
         `portfolio`: B x num_assets
-        `prices_seq`: B x seq_len x num_assets
+        `prices_fc`: forecasted   B x seq_len x num_assets
+        `prices_gt`: ground truth B x seq_len x num_assets
         `tradability`: B x seq_len x num_assets
         `costs`: num_assets
     """
-    batch_size = price_seq.shape[0]
-    seq_len = price_seq.shape[1]
-    num_assets = price_seq.shape[2]
+    batch_size = prices_gt.shape[0]
+    seq_len = prices_gt.shape[1]
+    num_assets = prices_gt.shape[2]
     
-    init_value = pf[:, 0] + (pf[:, 1:] * price_seq[:, 0]).sum(-1).detach()
+    init_value = pf[:, 0] + (pf[:, 1:] * prices_gt[:, 0]).sum(-1).detach()
     
     # B x s x 2, B x s x 3
-    sell, buy = net_fn(pf, price_seq, tradability)
+    sell, buy = net_fn(pf, prices_fc, tradability)
     
     # reg_vec = torch.concat([sell, buy], dim=-1).reshape((-1, num_assets * 2 + 1))
     # reg = (reg_vec * (1 - reg_vec)).sum(-1)
@@ -55,11 +57,11 @@ def run_network(step, pf, price_seq, tradability, net_fn: Seq2SeqPolicy, costs, 
     for date in range(seq_len - 1):
         # Sell
         assets_trade = new_pf[:, 1:] * sell[:, date]
-        new_cash = new_pf[:, 0] + (assets_trade * tradability[:, date] * (1 - costs) * price_seq[:, date]).sum(-1)
+        new_cash = new_pf[:, 0] + (assets_trade * tradability[:, date] * (1 - costs) * prices_gt[:, date]).sum(-1)
         
         # Buy
         cash_trade = new_cash.unsqueeze(-1).tile((1, num_assets+1)) * buy[:, date]
-        new_assets = cash_trade[:, 1:] * tradability[:, date] * (1 - costs) / price_seq[:, date] + new_pf[:, 1:] * (1 - sell[:, date])
+        new_assets = cash_trade[:, 1:] * tradability[:, date] * (1 - costs) / prices_gt[:, date] + new_pf[:, 1:] * (1 - sell[:, date])
         
         new_pf = torch.concat([
             cash_trade[:, :1],
@@ -68,7 +70,7 @@ def run_network(step, pf, price_seq, tradability, net_fn: Seq2SeqPolicy, costs, 
         
         # profit = profit + (new_value - init_value) * gamma
         # gamma *= gamma
-        new_value = new_pf[:, 0] + (new_pf[:, 1:] * price_seq[:, date + 1]).sum(-1)
+        new_value = new_pf[:, 0] + (new_pf[:, 1:] * prices_gt[:, date + 1]).sum(-1)
         profit = profit + (new_value - init_value) * gamma
         
         if plot_trade:
@@ -76,8 +78,10 @@ def run_network(step, pf, price_seq, tradability, net_fn: Seq2SeqPolicy, costs, 
                 "Cash": cash_trade[0, 0].detach().cpu(),
                 "BTC":  new_pf[0, 1].detach().cpu(),
                 "Gold": new_pf[0, 2].detach().cpu(),
-                "Price_BTC": price_seq[0, date, 0].detach().cpu(),
-                "Price_Gold": price_seq[0, date, 1].detach().cpu(),
+                "Price_BTC": prices_gt[0, date, 0].detach().cpu(),
+                "Price_Gold": prices_gt[0, date, 1].detach().cpu(),
+                "Price_BTC_FC": prices_fc[0, date, 0].detach().cpu(),
+                "Price_Gold_FC": prices_fc[0, date, 1].detach().cpu(),
                 "Value": new_value[0].detach().cpu(),
                 "Gamma": gamma
             }
@@ -89,18 +93,25 @@ def run_network(step, pf, price_seq, tradability, net_fn: Seq2SeqPolicy, costs, 
     else:
         return profit, new_value - init_value
 
+
 def e2e_run(args, net, plot_trade=True, writer=None):
-    prices, tradability = get_data(args.data_path, args.device)
+    prices, tradability = get_data(args.real_data_path, args.device)
     
     batch_size = 1
     num_assets = len(args.assets)
     num_days = prices.shape[0]
     init_value = 1000.
     
-    prices = torch.concat([prices, prices[-args.seq_len:]], dim=0).unsqueeze(0)
-    tradability = torch.concat([tradability, tradability[-args.seq_len:]], dim=0).unsqueeze(0)
-    
     costs = torch.from_numpy(np.asarray([args.cost_trans[asset] for asset in args.assets])).to(args.device).unsqueeze(0)
+    
+    # Post-padding for tradability, not needed for prices.
+    tradability = torch.concat([tradability, tradability[-args.seq_len:]], dim=0).unsqueeze(0)
+    # prices = torch.concat([prices, prices[-args.seq_len:]], dim=0).unsqueeze(0)
+    
+    # prices = prices + torch.normal(0, 1, size=prices.shape, device=prices.device) * prices.mean() * 0.05
+    
+    # Forecaster for prices
+    forecaster = Forecaster(prices)
     
     net.eval()
     
@@ -108,51 +119,60 @@ def e2e_run(args, net, plot_trade=True, writer=None):
     
     if args.seq_stripe:
         prof = 0
-        for step in tqdm(np.arange(0, num_days, args.seq_len - 1)):
+        for step in tqdm(np.arange(args.initial_waiting, num_days, args.seq_len - 1)):
+            prices_fc, prices_gt = forecaster.forecast(step, args.seq_len, mode='gt', padding=True)
+            prices_fc = prices_fc.unsqueeze(0)
+            prices_gt = prices_gt.unsqueeze(0)
+            
             # _, new_value, pf = run_network(step, pf,
             reward, profit, new_value, pf = run_network(step, pf,
-                                 prices[:, step:step+args.seq_len], tradability[:, step:step+args.seq_len],
+                                 prices_fc, prices_gt, tradability[:, step:step+args.seq_len],
+                                #  prices[:, step:step+args.seq_len], tradability[:, step:step+args.seq_len],
                                  net, costs=costs, gamma=args.profit_discount,
                                  plot_trade=True, ret_pf=True, writer=writer)
             prof = prof + profit.sum(-1)
-            tqdm.write(f"Step { step }: value = { new_value.item() }, pf = { pf.detach().cpu().numpy() }, pr = { prices[:, step].detach().cpu().numpy() }")
+            tqdm.write(f"Step { step }: value = { new_value.item() }, pf = { pf.detach().cpu().numpy() }, pr = { prices[step].detach().cpu().numpy() }")
         # new_value = new_value.sum(-1)
     else:
         for step in trange(num_days):
-            sell, buy = net(pf, prices[:, step:step+args.seq_len], tradability[:, step:step+args.seq_len])
+            prices_fc, prices_gt = forecaster.forecast(step, args.seq_len, mode='gt', padding=True)
+            prices_fc = prices_fc.unsqueeze(0)
+            prices_gt = prices_gt.unsqueeze(0)
+            
+            # prices = prices + torch.normal(0, 1, size=prices.shape, device=prices.device) * prices.mean() * 0.05
+            sell, buy = net(pf, prices_fc, tradability[:, step:step+args.seq_len])
             # Sell
             assets_trade = pf[:, 1:] * sell[:, 0]
-            new_cash = pf[:, 0] + (assets_trade * tradability[:, step] * (1 - costs) * prices[:, step]).sum(-1)
+            new_cash = pf[:, 0] + (assets_trade * tradability[:, step] * (1 - costs) * prices_gt[:, 0]).sum(-1)
             
             # Buy
             cash_trade = new_cash.unsqueeze(-1).tile((1, num_assets+1)) * buy[:, 0]
-            new_assets = cash_trade[:, 1:] * tradability[:, step] * (1 - costs) / prices[:, step] + pf[:, 1:] * (1 - sell[:, 0])
+            new_assets = cash_trade[:, 1:] * tradability[:, step] * (1 - costs) / prices_gt[:, 0] + pf[:, 1:] * (1 - sell[:, 0])
             
             pf = torch.concat([
                 cash_trade[:, :1],
                 new_assets
             ], dim=-1)
             
-            new_value = (pf[:, 0] + (pf[:, 1:] * prices[:, step + 1]).sum(-1))
+            new_value = (pf[:, 0] + (pf[:, 1:] * prices_gt[:, 1]).sum(-1))
             
             if plot_trade:
                 plot = {
                     "Cash": cash_trade[0, 0].detach().cpu(),
                     "BTC":  pf[0, 1].detach().cpu(),
                     "Gold": pf[0, 2].detach().cpu(),
-                    "Price_BTC": prices[0, step, 0].detach().cpu(),
-                    "Price_Gold": prices[0, step, 1].detach().cpu(),
+                    "Price_BTC": prices[step, 0].detach().cpu(),
+                    "Price_Gold": prices[step, 1].detach().cpu(),
                     "Value": new_value[0].detach().cpu()
                 }
-                writer.add_scalars(f"Trade { step }", plot, step + 1)
+                writer.add_scalars(f"Trade", plot, step + 1)
             tqdm.write(f"Step { step }: value = { new_value[0].item() }, pf = { pf.detach().cpu().numpy() }")
         new_value = new_value[0]
     
     # new_value = new_value.detach().cpu().item()
     print(f"""
 ========== Evaluation ==========
-Value: { new_value.item() }
-Profit: { prof.item() }
+Value: { new_value.item() } with profit { new_value.item() - init_value }
 ================================
           """)
         
@@ -161,12 +181,14 @@ def get(args, writer=None):
     sd_filename = os.path.join("data", "trader", f"{args.seq_len}_{ args.seq_encode_mode }_{ 'cons' if args.consider_tradability else 'ignr' }_{ args.epoch }.pt")
     
     if args.force_retrain or not os.path.isfile(sd_filename):
-        # seq = torch.from_numpy(pd.read_csv(args.seq_file_path).to_numpy()).to(args.device).unsqueeze(0).tile((args.batch_size, 1, 1))
+        prices, tradability = get_data(args.data_path, args.device, sample_tradability=True, untradability_assets=[-1])
+        prices = prices / 10 + 200 + 500 * torch.rand((1)).to(args.device)
+        prices = prices + torch.normal(0, 1, size=prices.shape, device=prices.device) * prices.mean() * 0.05
         
-        prices, tradability = get_data(args.data_path, args.device)
-        
-        num_assets = len(args.assets)
         num_days = prices.shape[0]
+        num_assets = len(args.assets)
+        
+        tradability = sample_tradability(num_days, num_assets, indices=[-1], rate=0.2)
         
         net.train()
         
@@ -178,7 +200,7 @@ def get(args, writer=None):
             optimizer = torch.optim.Adam(params=net.parameters(), lr=1e-3*(0.999**epoch))
             for step in trange(args.steps):
                 # B x seq_len x num_assets
-                # prices, tradability = seq_slide_select(seq, args.batch_size, args.seq_len, len(args.assets), require_tradability=True, tradability_assets=[-1])
+                # prices, tradability = seq_slide_select(seq, args.seq_len, require_tradability=True, tradability_assets=[-1])
                 # B x (num_assets + 1)
                 init_pf = sample_init_pf(args.batch_size, num_assets, ranges=[[0., 20000.], [0., 10.], [0., 200.]], device='cuda')
                 # Training with real data - not used
@@ -196,7 +218,7 @@ def get(args, writer=None):
                 # price_seq = prices[step:step+args.seq_len].unsqueeze(0).tile((args.batch_size, 1, 1))
                 # tdblt_seq = tradability[step:step+args.seq_len].unsqueeze(0).tile((args.batch_size, 1, 1))
                 
-                reward, profit = run_network(step, init_pf, price_seq, tdblt_seq, net, costs=costs, gamma=args.profit_discount, plot_trade=False, writer=writer)
+                reward, profit = run_network(step, init_pf, price_seq, price_seq, tdblt_seq, net, costs=costs, gamma=args.profit_discount, plot_trade=False, writer=writer)
                 
                 optimizer.zero_grad()
                 loss = - ((reward + profit).sum(-1) + (profit.mean() / profit.std()))
@@ -236,14 +258,16 @@ def parse_arguments():
                         help="Mode of encoding price sequence: ['deri-1', 'delta', 'gru']")
     
     # E2E Trading
+    parser.add_argument("--initial_waiting", default=50, type=int, help="Days in the beginning without trading")
     parser.add_argument("--seq_stripe", default=False, type=bool, help="Whether or not use seq_len as action stripe size")
     
     # Data
     parser.add_argument("--seq_len", default=16, type=int, help="Length of sequence")
-    parser.add_argument("--data_path", default="data/data.csv", type=str, help="Path of data")
+    parser.add_argument("--real_data_path", default="data/data.csv", type=str, help="Path of data")
+    parser.add_argument("--data_path", default="data/data_gen.csv", type=str, help="Path of data")
     
     # Computation
-    parser.add_argument("--epoch", default=20, type=int, help="Epochs")
+    parser.add_argument("--epoch", default=40, type=int, help="Epochs")
     parser.add_argument("--batch_size", default=4, type=int, help="Batch size")
     parser.add_argument("--steps", default=256, type=int, help="Batch size")
     parser.add_argument("--device", default="cuda", type=str, help="Device of computation")
@@ -274,6 +298,7 @@ if __name__ == '__main__':
     args = parse_arguments()
     
     args.seq_stripe = True
+    args.force_retrain = True
     
     writer=SummaryWriter(args.summary_log_dir)
     net = get(args, writer)

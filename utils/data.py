@@ -57,24 +57,35 @@ def seq_slide_select(sequences, seq_len, require_tradability=False, tradability_
     else:
         return seqs
 
-def get_data(data_path, device):
+def get_data(data_path, device, sample_tradability=False, untradability_assets=[-1]):
     if not os.path.isfile(data_path):
         raise NotImplementedError()
     print(f"Reading data from file { data_path }")
     
     data = pd.read_csv(data_path)
-    
+    num_days = data.shape[0]
     # num_days x num_assets with prices in USD
     df = pd.DataFrame(data=data, columns=['btc', 'gold_inter'])
     prices = torch.from_numpy(df.to_numpy()).float().to(device)
-    # num_days x num_assets with {0., 1.}
-    tradability = torch.from_numpy(pd.DataFrame(data=data, columns=['btc_tradable', 'gold_tradable']).to_numpy()).float().to(device)
+    if not sample_tradability:
+        # num_days x num_assets with {0., 1.}
+        tradability = torch.from_numpy(pd.DataFrame(data=data, columns=['btc_tradable', 'gold_tradable']).to_numpy()).float().to(device)
+        unav = torch.from_numpy(data['gold_tradable'].to_numpy() == False).int().sum().item()
+    else:
+        unav = 0
+        tradability = torch.ones_like(prices).to(prices.device)
+        for idx in untradability_assets:
+            indices = torch.randint(0, num_days, [int(num_days * 0.3)]).to(prices.device)
+            tradability[indices, idx] = 0.
+            unav += int(num_days * 0.3)
     
     print(f"========== Data Loaded ==========")
     print(df.describe())
-    print(f"Totally { data.shape[0] } days of trade, with { torch.from_numpy(data['gold_tradable'].to_numpy() == False).int().sum().item() } unavailable for gold.")
+    print(f"Totally { num_days } days of trade, with { unav } unavailable for gold.")
     print(f"========== Data Loaded ==========")
+    
     return prices, tradability
+
 
 """
 Abandoned
