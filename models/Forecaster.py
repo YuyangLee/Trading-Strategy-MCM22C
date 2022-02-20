@@ -1,10 +1,18 @@
 import torch
 import numpy as np
+import pandas as pd
+import statsmodels.api as sm
+from statsmodels.tsa.statespace.varmax import VARMAX
+from statsmodels.tsa.arima.model import ARIMA
+from statsmodels.tsa.holtwinters import ExponentialSmoothing
+from statsmodels.tsa.stattools import acf
+
 
 class Forecaster():
-    def __init__(self, data):
+    def __init__(self, data, device='cuda'):
         # seq_len x ...
         self.data = data
+        self.device = device
     
     def forecast(self, step, len, mode='gt', padding=True):
         """
@@ -32,10 +40,19 @@ class Forecaster():
         elif mode == 'stat':
             # TODO: Implementation by C Zhou
             # forecast = ...
-            pass
-        
+            train_btc  = pd.DataFrame(self.data[step - 50 : step+1, 0].to('cpu'))
+            train_gold = pd.DataFrame(self.data[step - 50 : step+1, 1].to('cpu'))
+            
+            model_fit_btc = ARIMA(train_btc, order=(5, 2, 3)).fit()
+            model_fit_gold = ARIMA(train_gold, order=(5, 2, 3)).fit()
+            fc_btc = torch.tensor(np.array(model_fit_btc.forecast(steps=len-1))).to(self.device)
+            fc_btc = torch.concat([self.data[step, 0].unsqueeze(0), fc_btc], dim=-1)
+            fc_gold = torch.tensor(np.array(model_fit_gold.forecast(steps=len-1))).to(self.device)
+            fc_gold = torch.concat([self.data[step, 1].unsqueeze(0), fc_gold], dim=-1)
+            forecast = torch.concat([fc_btc.unsqueeze(0), fc_gold.unsqueeze(0)], dim=0)
+            
         elif mode == 'seq2seq':
             pass
         
-        return truth, forecast
+        return forecast, truth
             

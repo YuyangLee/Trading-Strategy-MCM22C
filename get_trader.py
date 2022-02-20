@@ -120,7 +120,7 @@ def e2e_run(args, net, plot_trade=True, writer=None):
     if args.seq_stripe:
         prof = 0
         for step in tqdm(np.arange(args.initial_waiting, num_days, args.seq_len - 1)):
-            prices_fc, prices_gt = forecaster.forecast(step, args.seq_len, mode='gt', padding=True)
+            prices_fc, prices_gt = forecaster.forecast(step, args.seq_len, mode='stat', padding=True)
             prices_fc = prices_fc.unsqueeze(0)
             prices_gt = prices_gt.unsqueeze(0)
             
@@ -134,8 +134,8 @@ def e2e_run(args, net, plot_trade=True, writer=None):
             tqdm.write(f"Step { step }: value = { new_value.item() }, pf = { pf.detach().cpu().numpy() }, pr = { prices[step].detach().cpu().numpy() }")
         # new_value = new_value.sum(-1)
     else:
-        for step in trange(num_days):
-            prices_fc, prices_gt = forecaster.forecast(step, args.seq_len, mode='gt', padding=True)
+        for step in trange(args.initial_waiting, num_days):
+            prices_fc, prices_gt = forecaster.forecast(step, args.seq_len, mode='stat', padding=True)
             prices_fc = prices_fc.unsqueeze(0)
             prices_gt = prices_gt.unsqueeze(0)
             
@@ -297,8 +297,8 @@ def get_trader(assets, cost_trans, seq_len, consider_tradability=False, output_d
 if __name__ == '__main__':
     args = parse_arguments()
     
-    args.seq_stripe = True
-    args.force_retrain = True
+    args.seq_stripe = False
+    args.force_retrain = False
     
     writer=SummaryWriter(args.summary_log_dir)
     net = get(args, writer)
