@@ -66,11 +66,11 @@ def run_network(step, pf, price_seq, tradability, net_fn: Seq2SeqPolicy, costs, 
             new_assets
         ], dim=-1)
         
+        # profit = profit + (new_value - init_value) * gamma
+        # gamma *= gamma
         new_value = new_pf[:, 0] + (new_pf[:, 1:] * price_seq[:, date + 1]).sum(-1)
-        
-        # profit = profit + (new_value - value) * gamma
         profit = profit + (new_value - init_value) * gamma
-      
+        
         if plot_trade:
             plot = {
                 "Cash": cash_trade[0, 0].detach().cpu(),
@@ -81,14 +81,13 @@ def run_network(step, pf, price_seq, tradability, net_fn: Seq2SeqPolicy, costs, 
                 "Value": new_value[0].detach().cpu(),
                 "Gamma": gamma
             }
-            writer.add_scalars(f"Trade { step }", plot, date + 1)
+            writer.add_scalars(f"Trade", plot, step + date)
         
-        gamma *= gamma
         
     if ret_pf:
-        return profit.sum(-1), new_value.sum(-1), new_pf
+        return profit, new_value - init_value, new_value, new_pf
     else:
-        return profit.sum(-1), new_value.sum(-1)
+        return profit, new_value - init_value
 
 def e2e_run(args, net, plot_trade=True, writer=None):
     prices, tradability = get_data(args.data_path, args.device)
@@ -108,13 +107,16 @@ def e2e_run(args, net, plot_trade=True, writer=None):
     pf = torch.tensor([1000., 0., 0.]).to(args.device).unsqueeze(0)
     
     if args.seq_stripe:
+        prof = 0
         for step in tqdm(np.arange(0, num_days, args.seq_len - 1)):
-            _, new_value, pf = run_network(step, pf,
+            # _, new_value, pf = run_network(step, pf,
+            reward, profit, new_value, pf = run_network(step, pf,
                                  prices[:, step:step+args.seq_len], tradability[:, step:step+args.seq_len],
                                  net, costs=costs, gamma=args.profit_discount,
-                                 plot_trade=False, ret_pf=True, writer=writer)
-            tqdm.write(f"Step { step }: value = { new_value.item() }, pf = { pf.detach().cpu().numpy() }")
-        new_value = new_value.sum(-1)
+                                 plot_trade=True, ret_pf=True, writer=writer)
+            prof = prof + profit.sum(-1)
+            tqdm.write(f"Step { step }: value = { new_value.item() }, pf = { pf.detach().cpu().numpy() }, pr = { prices[:, step].detach().cpu().numpy() }")
+        # new_value = new_value.sum(-1)
     else:
         for step in trange(num_days):
             sell, buy = net(pf, prices[:, step:step+args.seq_len], tradability[:, step:step+args.seq_len])
@@ -146,11 +148,11 @@ def e2e_run(args, net, plot_trade=True, writer=None):
             tqdm.write(f"Step { step }: value = { new_value[0].item() }, pf = { pf.detach().cpu().numpy() }")
         new_value = new_value[0]
     
-    new_value = new_value.detach().cpu().item()
+    # new_value = new_value.detach().cpu().item()
     print(f"""
 ========== Evaluation ==========
-Value:  { init_value } -> { new_value }
-Profit: { (new_value - init_value) / init_value * 100 }%
+Value: { new_value.item() }
+Profit: { prof.item() }
 ================================
           """)
         
@@ -171,7 +173,7 @@ def get(args, writer=None):
         costs = torch.from_numpy(np.asarray([args.cost_trans[asset] for asset in args.assets])).to(args.device).unsqueeze(0)
         for epoch in range(args.epoch):
             prof_mean = 0
-            val_mean  = 0
+            rewd_mean  = 0
             
             optimizer = torch.optim.Adam(params=net.parameters(), lr=1e-3*(0.999**epoch))
             for step in trange(args.steps):
@@ -194,21 +196,22 @@ def get(args, writer=None):
                 # price_seq = prices[step:step+args.seq_len].unsqueeze(0).tile((args.batch_size, 1, 1))
                 # tdblt_seq = tradability[step:step+args.seq_len].unsqueeze(0).tile((args.batch_size, 1, 1))
                 
-                profit, value = run_network(step, init_pf, price_seq, tdblt_seq, net, costs=costs, gamma=args.profit_discount, plot_trade=False, writer=writer)
+                reward, profit = run_network(step, init_pf, price_seq, tdblt_seq, net, costs=costs, gamma=args.profit_discount, plot_trade=False, writer=writer)
                 
                 optimizer.zero_grad()
-                loss = - profit
-                # loss = - profit + reg.sum(-1)
+                loss = - ((reward + profit).sum(-1) + (profit.mean() / profit.std()))
+                          
                 epsilon = torch.rand(1)
                 if epsilon < 0.4 * np.exp(-0.5 * epoch):
                     loss = - loss * torch.rand(1).cuda()
+                    
                 loss.backward()
                 optimizer.step()
                 
-                prof_mean += profit.detach()
-                val_mean  += value.detach()
+                rewd_mean  += reward.sum(-1).detach()
+                prof_mean += profit.sum(-1).detach()
         
-            tqdm.write(f"Epoch #{ epoch }: Ave. profit { ( prof_mean / args.steps ).item() } Ave. value { ( val_mean / args.steps ).item() }")
+            tqdm.write(f"Epoch #{ epoch }: Ave. profit { ( prof_mean / args.steps ).item() } Ave. reward { ( rewd_mean / args.steps ).item() }")
             
         torch.save(net.state_dict(), sd_filename)
     else:
@@ -236,7 +239,7 @@ def parse_arguments():
     parser.add_argument("--seq_stripe", default=False, type=bool, help="Whether or not use seq_len as action stripe size")
     
     # Data
-    parser.add_argument("--seq_len", default=32, type=int, help="Length of sequence")
+    parser.add_argument("--seq_len", default=16, type=int, help="Length of sequence")
     parser.add_argument("--data_path", default="data/data.csv", type=str, help="Path of data")
     
     # Computation
@@ -270,7 +273,7 @@ def get_trader(assets, cost_trans, seq_len, consider_tradability=False, output_d
 if __name__ == '__main__':
     args = parse_arguments()
     
-    args.seq_stripe = False
+    args.seq_stripe = True
     
     writer=SummaryWriter(args.summary_log_dir)
     net = get(args, writer)

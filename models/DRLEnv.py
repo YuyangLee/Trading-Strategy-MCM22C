@@ -45,34 +45,33 @@ class Env():
         else:
             raise NotImplementedError()
 
-        init_value = (portfolio[:, 0] + (portfolio[:, 1:] * prices[:, step]).sum(-1)).detach()
         
-        for i in range(self.seq_len - 1):
-            # Sell
-            assets_trade = portfolio[:, 1:] * sell[:, i]
-            # assets_trade = portfolio[:, 1:] * sell
-            new_cash = portfolio[:, 0] + (assets_trade * tradab[:, step] * (1 - self.costs) * prices[:, step]).sum(-1)
-            
-            # Buy
-            cash_trade = new_cash.unsqueeze(-1).tile((1, num_assets+1)) * buy
-            # cash_trade = new_cash.unsqueeze(-1).tile((1, num_assets+1)) * buy[:, i]
-            new_assets = cash_trade[:, 1:] * tradab[:, step] * (1 - self.costs) / prices[:, step] + portfolio[:, 1:] * (1 - sell)
-            # new_assets = cash_trade[:, 1:] * tradab[:, step] * (1 - self.costs) / prices[:, step] + portfolio[:, 1:] * (1 - sell[:, i])
-            
-            portfolio = torch.concat([
-                cash_trade[:, :1],
-                new_assets
-            ], dim=-1)
-            
-            new_value = portfolio[:, 0] + (portfolio[:, 1:] * prices[:, step + 1]).sum(-1)
-            
-        i += 1
-        ret_prices = prices[:, step+i:step+i+self.seq_len]
-        ret_tradab = tradab[:, step+i:step+i+self.seq_len]
-        # ret_prices = prices[:, step:step+self.seq_len]
-        # ret_tradab = tradab[:, step:step+self.seq_len]
+        #for i in range(self.seq_len - 1):
+        # Sell
+        # assets_trade = portfolio[:, 1:] * sell[:, i]
+        assets_trade = portfolio[:, 1:] * sell
+        new_cash = portfolio[:, 0] + (assets_trade * tradab[:, step] * (1 - self.costs) * prices[:, step]).sum(-1)
         
-        return portfolio, new_value - init_value, ret_prices, ret_tradab
+        # Buy
+        cash_trade = new_cash.unsqueeze(-1).tile((1, num_assets+1)) * buy
+        # cash_trade = new_cash.unsqueeze(-1).tile((1, num_assets+1)) * buy[:, i]
+        new_assets = cash_trade[:, 1:] * tradab[:, step] * (1 - self.costs) / prices[:, step] + portfolio[:, 1:] * (1 - sell)
+        # new_assets = cash_trade[:, 1:] * tradab[:, step] * (1 - self.costs) / prices[:, step] + portfolio[:, 1:] * (1 - sell[:, i])
+        
+        portfolio = torch.concat([
+            cash_trade[:, :1],
+            new_assets
+        ], dim=-1)
+        
+        new_value = portfolio[:, 0] + (portfolio[:, 1:] * prices[:, step + 1]).sum(-1)
+        
+        # i += 1
+        # ret_prices = prices[:, step+i:step+i+self.seq_len]
+        # ret_tradab = tradab[:, step+i:step+i+self.seq_len]
+        ret_prices = prices[:, step:step+self.seq_len]
+        ret_tradab = tradab[:, step:step+self.seq_len]
+        
+        return portfolio, new_value, ret_prices, ret_tradab
 
     def reset(self, **args):
         

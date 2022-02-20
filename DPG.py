@@ -46,6 +46,7 @@ class DPG(object):
     def lr_decay(self, gamma=0.999):
         self.lr = self.lr * gamma
         self.optimizer = torch.optim.SGD(self.policy.parameters(), lr=self.lr)
+        return self.lr
 
     def choose_action(self, portfolio, price_seq, tradability):
         """
@@ -57,9 +58,8 @@ class DPG(object):
             `tradability`: B x seq_len x num_assets
         """
         sell, buy = self.policy(portfolio, price_seq, tradability)
-        # return sell[:, 0], buy[:, 0]
-        return sell, buy
-
+        return sell[:, 0], buy[:, 0]
+        # return sell, buy
 
 def main(args, writer):
     num_assets = len(args.assets)
@@ -119,6 +119,7 @@ def main(args, writer):
         reward = 0
 
         ret_discount = 0.99
+        init_value = (portfolio[:, 0] + (portfolio[:, 1:] * prices[:, 0]).sum(-1)).detach()
         for step in range(step_lo, step_hi):
         # for step in range(step_lo, step_hi, args.seq_len - 1):
 
@@ -126,11 +127,9 @@ def main(args, writer):
                                           prices,
                                           tradability)
 
-            portfolio, ret, prices, tradability = env.step(step, portfolio, sell, buy)
+            portfolio, new_value, prices, tradability = env.step(step, portfolio, sell, buy)
 
             # Optimize
-            reward = reward + ret * ret_discount
-            ret_discount *= ret_discount
 
         # if episode % 200 == 0:
         #     with torch.no_grad():
@@ -142,16 +141,16 @@ def main(args, writer):
         #             portfolio_test, ret_test, prices_test, tradability_test = test_env.step(step_test, portfolio_test, buy_test, sell_test)
         #     tqdm.write(f"Test: Total profit { ret_test }")
 
-        reward = reward.sum(-1)
+        reward = (new_value - init_value).sum(-1)
 
-        # dpg.optimizer.zero_grad()
-        # loss = - reward
-        # loss.backward()
-        # dpg.optimizer.step()
-        # dpg.lr_decay()
+        dpg.optimizer.zero_grad()
+        loss = - reward
+        loss.backward()
+        dpg.optimizer.step()
+        lr = dpg.lr_decay()
 
 
-        tqdm.write(f"Episode: { episode },  Ave. Reward: { reward.mean().item() }")
+        tqdm.write(f"Episode: { episode },  Ave. Reward: { reward.mean().item() } Lr: { lr }")
         writer.add_scalars(f"Ave. Reward", {
             "Value": reward.mean().item()
         }, episode)
@@ -180,7 +179,7 @@ def parse_arguments(agile=False):
                         50, type=int, help="Capacity of memory")
 
     # Actor
-    parser.add_argument("--seq_len", default=32, type=int,
+    parser.add_argument("--seq_len", default=16, type=int,
                         help="Len of price sequence as part of the state")
     parser.add_argument("--action_var", default=1.0, type=float,
                         help="Var of action noises, will decay through steps")
@@ -195,7 +194,7 @@ def parse_arguments(agile=False):
                         type=str, help="Path of data")
 
     # Computation
-    parser.add_argument("--batch_size", default=1, type=int, help="Batch size")
+    parser.add_argument("--batch_size", default=16, type=int, help="Batch size")
     parser.add_argument("--device", default="cuda",
                         type=str, help="Device of computation")
 
