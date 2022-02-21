@@ -48,12 +48,12 @@ class Seq2SeqPolicy(nn.Module):
         self.policy = nn.Sequential(
             nn.Linear(self.input_len, 128),
             nn.ReLU(inplace=True),
+            nn.Linear(128, 128),
+            nn.ReLU(inplace=True),
+            nn.Dropout(0.25),
             nn.Linear(128, 64),
             nn.ReLU(inplace=True),
-            # nn.Dropout(0.25),
-            nn.Linear(64, 32),
-            nn.ReLU(inplace=True),
-            nn.Linear(32, self.output_len),
+            nn.Linear(64, self.output_len),
             nn.Sigmoid()
         ).to(device)
         
@@ -134,11 +134,11 @@ class BiSeq2SeqPolicy(nn.Module):
         self.policy = nn.Sequential(
             nn.Linear(self.input_len, 128),
             nn.ReLU(inplace=True),
+            nn.Linear(128, 128),
+            nn.ReLU(inplace=True),
             nn.Linear(128, 64),
             nn.ReLU(inplace=True),
-            nn.Linear(64, 32),
-            nn.ReLU(inplace=True),
-            nn.Linear(32, self.output_len),
+            nn.Linear(64, self.output_len),
             nn.Sigmoid()
         ).to(device)
         
