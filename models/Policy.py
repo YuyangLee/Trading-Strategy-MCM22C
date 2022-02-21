@@ -48,12 +48,12 @@ class Seq2SeqPolicy(nn.Module):
         self.policy = nn.Sequential(
             nn.Linear(self.input_len, 128),
             nn.ReLU(inplace=True),
-            nn.Linear(128, 128),
-            nn.ReLU(inplace=True),
-            nn.Dropout(0.25),
             nn.Linear(128, 64),
             nn.ReLU(inplace=True),
-            nn.Linear(64, self.output_len),
+            # nn.Dropout(0.25),
+            nn.Linear(64, 32),
+            nn.ReLU(inplace=True),
+            nn.Linear(32, self.output_len),
             nn.Sigmoid()
         ).to(device)
         
@@ -70,7 +70,7 @@ class Seq2SeqPolicy(nn.Module):
         """
         if self.regular_input:
             init_portfolio = F.normalize(init_portfolio, dim=-1)
-            prices_seq = prices_seq / torch.abs(prices_seq).max()
+            prices_seq = prices_seq / torch.abs(prices_seq.max())
         seq_code = self.seq_enc(prices_seq)
         
         input = torch.concat([

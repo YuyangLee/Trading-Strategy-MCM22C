@@ -14,17 +14,6 @@ from models.Forecaster import Forecaster
 from models.Policy import Seq2SeqPolicy
 from utils.data import *
 
-
-# TODO: Fix this...
-def sample_tradability(seq_len, num_assets=2, indices=[-1], rate=0.2, device='cuda'):
-    tradability = torch.ones([seq_len, num_assets], device=device).float()
-    for idx in indices:
-        untradable_idx = torch.randint(0, seq_len, [int(seq_len * 0.3)], device=device)
-        # untradable_idx = torch.randint(0, len, [len * 0.3 * torch.rand((1))], device=device)
-        tradability[untradable_idx, idx] = 0.
-        
-    return tradability
-    
 def sample_init_pf(batch_size, num_assets=2, ranges=[[0., 200000.], [0., 100.], [0., 2000.]], device='cuda'):
     ranges =  torch.Tensor(ranges).to(device)
     ran_len = ranges[:, 1] - ranges[:, 0]
@@ -58,6 +47,7 @@ def run_network(step, pf, prices_fc, prices_gt, tradability, net_fn: Seq2SeqPoli
     new_pf = pf.clone()
     
     reg = 0
+    
     for date in range(seq_len - 1):
         # Sell
         assets_sell_amount = new_pf[:, 1:] * sell[:, date] * tradability[:, date]
@@ -78,41 +68,6 @@ def run_network(step, pf, prices_fc, prices_gt, tradability, net_fn: Seq2SeqPoli
         profit = profit + (new_value - init_value) * gamma
         reg = reg + (sell * buy[..., 1:]).sum(-1).sum(-1).sum(-1)
         
-    # for date in range(seq_len - 1):
-    #     # Sell
-    #     assets_trade = new_pf[:, 1:] * sell[:, date]
-    #     new_cash = new_pf[:, 0] + (assets_trade * tradability[:, date] * (1 - costs) * prices_gt[:, date]).sum(-1)
-        
-    #     # Buy
-    #     cash_trade = new_cash.unsqueeze(-1).tile((1, num_assets+1)) * buy[:, date]
-    #     new_assets = cash_trade[:, 1:] * tradability[:, date] * (1 - costs) / prices_gt[:, date] + new_pf[:, 1:] * (1 - sell[:, date])
-        
-    #     new_pf = torch.concat([
-    #         cash_trade[:, :1],
-    #         new_assets
-    #     ], dim=-1)
-        
-    #     # profit = profit + (new_value - init_value) * gamma
-    #     # gamma *= gamma
-    #     new_value = new_pf[:, 0] + (new_pf[:, 1:] * prices_gt[:, date + 1]).sum(-1)
-    #     profit = profit + (new_value - init_value) * gamma
-    #     reg = reg + (sell * buy[..., 1:]).sum(-1).sum(-1).sum(-1)
-        
-        if plot_trade:
-            plot = {
-                "Cash": cash_trade[0, 0].detach().cpu(),
-                "BTC":  new_pf[0, 1].detach().cpu(),
-                "Gold": new_pf[0, 2].detach().cpu(),
-                "Price_BTC": prices_gt[0, date, 0].detach().cpu(),
-                "Price_Gold": prices_gt[0, date, 1].detach().cpu(),
-                "Price_BTC_FC": prices_fc[0, date, 0].detach().cpu(),
-                "Price_Gold_FC": prices_fc[0, date, 1].detach().cpu(),
-                "Value": new_value[0].detach().cpu(),
-                "Gamma": gamma
-            }
-            writer.add_scalars(f"Trade", plot, step + date)
-        
-        
     if ret_pf:
         return profit, new_value - init_value, new_value, new_pf, reg
     else:
@@ -121,32 +76,23 @@ def run_network(step, pf, prices_fc, prices_gt, tradability, net_fn: Seq2SeqPoli
 
 def e2e_run(args, net, plot_trade=True, mode='gt', writer=None):
     prices, tradability = get_data(args.real_data_path, args.device)
-    
-    batch_size = 1
-    num_assets = len(args.assets)
+    num_assets = 2
     num_days = prices.shape[0]
-    init_value = 1000.
     
     costs = torch.from_numpy(np.asarray([args.cost_trans[asset] for asset in args.assets])).to(args.device).unsqueeze(0)
     
     # Post-padding for tradability, not needed for prices.
-    tradability = torch.concat([tradability, tradability[-args.seq_len:]], dim=0).unsqueeze(0)
     prices = torch.concat([prices, prices[-args.seq_len:]], dim=0).unsqueeze(0)
-    
-    # prices = prices + torch.normal(0, 1, size=prices.shape, device=prices.device) * prices.mean() * 0.05
-    
-    # Forecaster for prices
-    forecaster = Forecaster(prices)
-    
-    net.eval()
-    # to_plot = pd.DataFrame(columns=['value', 'cash_balance', 'btc_balance', 'gold_balance', 'price_btc', 'price_gold', 'sell_btc', 'sell_gold', 'buy_btc', 'buy_gold', 'cash_remain'])
-    to_plot = pd.DataFrame()
+    tradability = torch.concat([tradability, tradability[-args.seq_len:]], dim=0).unsqueeze(0)
     pf = torch.tensor([1000., 0., 0.]).to(args.device).unsqueeze(0)
+
+    net.eval()
+    
+    to_plot = pd.DataFrame()
+    
     for step in trange(args.initial_waiting, num_days):
         prices_seq = prices[:, step:step+args.seq_len]
-        prices_fc, _ = forecaster.forecast(step, args.seq_len, mode=mode)
-        prices_fc = prices_fc.unsqueeze(0)
-        sell, buy = net(pf, prices_fc, tradability[:, step:step+args.seq_len])
+        sell, buy = net(pf, prices_seq, tradability[:, step:step+args.seq_len])
         # Sell
         assets_sell_amount = pf[:, 1:] * sell[:, 0] * tradability[:, step]
         new_cash = pf[:, 0] + (assets_sell_amount * (1 - costs) * prices_seq[:, 0]).sum(-1)
@@ -184,10 +130,11 @@ def e2e_run(args, net, plot_trade=True, mode='gt', writer=None):
         to_plot = to_plot.append(plot, ignore_index=True)
         tqdm.write(f"Step { step }: value = { new_value[0].item() }, pf = { pf.detach().cpu().numpy() }")
     new_value = new_value[0]
+    
     # new_value = new_value.detach().cpu().item()
     print(f"""
 ========== Evaluation ==========
-Value: { new_value.item() } with profit { new_value.item() - init_value }
+Value: { new_value.item() } with profit { new_value.item() - 1000. }
 ================================
           """)
     
@@ -205,30 +152,13 @@ def get(args, writer=None, sd_filename=None):
         num_days = prices.shape[0]
         num_assets = len(args.assets)
         
-        tradability = sample_tradability(num_days, num_assets, indices=[-1], rate=0.2)
-        
         net.train()
         prof_traj = []
         costs = torch.from_numpy(np.asarray([args.cost_trans[asset] for asset in args.assets])).to(args.device).unsqueeze(0)
         for epoch in range(args.epoch):
-            # prices = torch.abs(prices_orig + torch.normal(0, 1, size=prices_orig.shape, device=prices_orig.device) * prices_orig.mean() * 0.01)
-            
-            # if epoch % 10 == 0:
-            #     prof, _ = e2e_run(args, net, plot_trade=True, mode='gt', writer=writer)
-            #     prof_traj.append(prof)
-            
-            prof_mean = 0
-            rewd_mean  = 0
-            
             optimizer = torch.optim.SGD(params=net.parameters(), lr=1e-3*(0.98**epoch))
             for step in trange(args.steps):
-                # B x seq_len x num_assets
-                # prices, tradability = seq_slide_select(seq, args.seq_len, require_tradability=True, tradability_assets=[-1])
-                # B x (num_assets + 1)
                 init_pf = sample_init_pf(args.batch_size, num_assets, ranges=[[0., 20000.], [0., 10.], [0., 200.]], device='cuda')
-                # Training with real data - not used
-                # init_pf = torch.rand([args.batch_size, num_assets + 1], device=args.device).float()
-                # init_pf[..., 0] = args.initial_cash * torch.rand([1], device=args.device).float() * 100
 
                 seq_start_idx = torch.randint(0, num_days - args.seq_len, [args.batch_size], device=args.device)
                 price_seq = torch.zeros([0, args.seq_len, num_assets], device=args.device)
@@ -258,10 +188,7 @@ def get(args, writer=None, sd_filename=None):
                 loss.backward()
                 optimizer.step()
                 
-                rewd_mean += reward.sum(-1).detach()
-                prof_mean += acc_gain.sum(-1).detach()
-        
-            tqdm.write(f"Epoch #{ epoch }: Ave. accumulative gain { ( prof_mean / args.steps ).item() } Ave. reward { ( rewd_mean / args.steps ).item() }")
+            # tqdm.write(f"Epoch #{ epoch }: Ave. accumulative gain { ( prof_mean / args.steps ).item() } Ave. reward { ( rewd_mean / args.steps ).item() }")
             
         torch.save(net.state_dict(), sd_filename)
     else:
@@ -296,7 +223,7 @@ def parse_arguments():
     parser.add_argument("--data_path", default="data/data_gen.csv", type=str, help="Path of data")
     
     # Computation
-    parser.add_argument("--epoch", default=60, type=int, help="Epochs")
+    parser.add_argument("--epoch", default=20, type=int, help="Epochs")
     parser.add_argument("--batch_size", default=4, type=int, help="Batch size")
     parser.add_argument("--steps", default=512, type=int, help="Batch size")
     parser.add_argument("--device", default="cuda", type=str, help="Device of computation")
@@ -330,34 +257,15 @@ if __name__ == '__main__':
     args.force_retrain = True
     
     writer=SummaryWriter(args.summary_log_dir)
-    
-    # Select:
-    # max_profit = 1000.
-    # for test_idx in range(10):
-    #     sd_filename = os.path.join("data", "trader", f"{args.seq_len}_{ args.seq_encode_mode }_{ 'cons' if args.consider_tradability else 'ignr' }_{ args.epoch }_{ test_idx }.pt")
-    #     net = get(args, writer)
-    #     args.real_data_path = "data/data_gen.csv"
-    #     with torch.no_grad():
-    #         profit = e2e_run(args, net, plot_trade=True, mode='gt', writer=writer)
-    #         if profit > max_profit:
-    #             max_profit = profit
-    #             print("Better network, saving...")
-    #             torch.save(net.state_dict(), sd_filename)
-                
+
     # Validate:
     args.real_data_path = "data/data.csv"
     args.file_path = 'data/data.csv'
     args.seq_file_path = 'data/data.csv'
-    args.force_retrain = False
-    net = get(args, writer, "data/trader/archive/16_deri-1_ignr_80.pt")
+    
+    net = get(args, writer)
     mode = 'gt'
     profit, to_plot = e2e_run(args, net, plot_trade=True, mode=mode, writer=writer)
-    # 
-    # "BTC":  pf[0, 1].detach().cpu(),
-    # "Gold": pf[0, 2].detach().cpu(),
-    # "Price_BTC": prices[step, 0].detach(
-    # "Price_Gold": prices[step, 1].detach
-    # "Value": new_value[0].detach().cpu()
     to_plot.to_csv(os.path.join("data", "trading", f"{args.seq_len}_{ args.seq_encode_mode }_{ mode }_{ 'cons' if args.consider_tradability else 'ignr' }.csv"))
     sns.relplot(y='value', data=to_plot)
     

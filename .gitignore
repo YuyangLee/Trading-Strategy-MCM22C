@@ -12,3 +12,6 @@ thirdparty/*
 
 # Nohup output
 nohup.out
+
+# Misc
+misc/*

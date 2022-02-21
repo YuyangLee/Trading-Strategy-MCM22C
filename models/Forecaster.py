@@ -85,36 +85,39 @@ class Forecaster():
         Returns:
             ground truth sequence (for next-step computation) and predicted sequence (for sampling action)
         """
-        truth = self.data[step:step+len].clone()
-        if padding and truth.shape[0] < len:
-            truth = torch.concat([truth, truth[-1:].tile([len - truth.shape[0]] + [1] * (truth.dim() - 1))], dim=0)
+        truth = self.data[:, step:step+len].clone()
+        # if padding and truth.shape[0] < len:
+        #     truth = torch.concat([truth, truth[-1:].tile([1, len - truth.shape[0]] + [1] * (truth.dim() - 2))], dim=0)
         
         if mode == 'gt':
             forecast = truth.clone()
             
         elif mode == 'ema':
-            train_btc  = pd.DataFrame(self.data[step - 50 : step+1, 0].to('cpu'))
-            train_gold = pd.DataFrame(self.data[step - 50 : step+1, 1].to('cpu'))
+            train_btc  = pd.DataFrame(self.data[0, step - 50 : step+1, 0].to('cpu'))
+            train_gold = pd.DataFrame(self.data[0, step - 50 : step+1, 1].to('cpu'))
             
             model_fit_btc = ExponentialSmoothing(train_btc, trend='add', seasonal=None, damped_trend=False).fit()
             model_fit_gold = ExponentialSmoothing(train_gold, trend='add', seasonal=None, damped_trend=False).fit()
             fc_btc = torch.tensor(np.array(model_fit_btc.forecast(steps=len-1))).to(self.device)
-            fc_btc = torch.concat([self.data[step, 0].unsqueeze(0), fc_btc], dim=-1)
+            fc_btc = torch.concat([self.data[0, step, 0].unsqueeze(0), fc_btc], dim=-1)
             fc_gold = torch.tensor(np.array(model_fit_gold.forecast(steps=len-1))).to(self.device)
-            fc_gold = torch.concat([self.data[step, 1].unsqueeze(0), fc_gold], dim=-1)
+            fc_gold = torch.concat([self.data[0, step, 1].unsqueeze(0), fc_gold], dim=-1)
             forecast = torch.concat([fc_btc.unsqueeze(-1), fc_gold.unsqueeze(-1)], dim=-1)
+            
+        elif mode == 'poly':
+            pass
             
         elif mode == 'stat':
             # ARIMA
-            train_btc  = np.log(pd.DataFrame(self.data[step - 50 : step+1, 0].to('cpu')))
-            train_gold = np.log(pd.DataFrame(self.data[step - 50 : step+1, 1].to('cpu')))
+            train_btc  = np.log(pd.DataFrame(self.data[0, step - 50 : step+1, 0].to('cpu')))
+            train_gold = np.log(pd.DataFrame(self.data[0, step - 50 : step+1, 1].to('cpu')))
             
             model_fit_btc = ARIMA(train_btc, order=(15, 1, 8)).fit()
             model_fit_gold = ARIMA(train_gold, order=(15, 1, 8)).fit()
             fc_btc = torch.exp(torch.tensor(np.array(model_fit_btc.forecast(steps=len-1))).to(self.device))
-            fc_btc = torch.concat([self.data[step, 0].unsqueeze(0), fc_btc], dim=-1)
+            fc_btc = torch.concat([self.data[0, step, 0].unsqueeze(0), fc_btc], dim=-1)
             fc_gold = torch.exp(torch.tensor(np.array(model_fit_gold.forecast(steps=len-1))).to(self.device))
-            fc_gold = torch.concat([self.data[step, 1].unsqueeze(0), fc_gold], dim=-1)
+            fc_gold = torch.concat([self.data[0, step, 1].unsqueeze(0), fc_gold], dim=-1)
             forecast = torch.concat([fc_btc.unsqueeze(0), fc_gold.unsqueeze(0)], dim=0)
             
             #VARIMA
