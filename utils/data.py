@@ -67,12 +67,15 @@ def get_data(data_path, device, sample_tradability=False, untradability_assets=[
     # num_days x num_assets with prices in USD
     df = pd.DataFrame(data=data, columns=['btc', 'gold_inter'])
     prices = torch.from_numpy(df.to_numpy()).float().to(device)
+    unav = 0
     if not sample_tradability:
         # num_days x num_assets with {0., 1.}
-        tradability = torch.from_numpy(pd.DataFrame(data=data, columns=['btc_tradable', 'gold_tradable']).to_numpy()).float().to(device)
-        unav = torch.from_numpy(data['gold_tradable'].to_numpy() == False).int().sum().item()
+        try:
+            tradability = torch.from_numpy(pd.DataFrame(data=data, columns=['btc_tradable', 'gold_tradable']).to_numpy()).float().to(device)
+            unav = torch.from_numpy(data['gold_tradable'].to_numpy() == False).int().sum().item()
+        except:
+            tradability = torch.ones_like(prices, device=prices.device).float()
     else:
-        unav = 0
         tradability = torch.ones_like(prices).to(prices.device)
         for idx in untradability_assets:
             indices = torch.randint(0, num_days, [int(num_days * 0.3)]).to(prices.device)

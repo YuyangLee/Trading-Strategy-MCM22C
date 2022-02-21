@@ -69,7 +69,7 @@ class Seq2SeqPolicy(nn.Module):
         """
         if self.regular_input:
             init_portfolio = F.normalize(init_portfolio, dim=-1)
-            prices_seq = prices_seq / prices_seq.max()
+            prices_seq = prices_seq / torch.abs(prices_seq).max()
         seq_code = self.seq_enc(prices_seq)
         
         input = torch.concat([

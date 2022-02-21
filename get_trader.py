@@ -54,6 +54,9 @@ def run_network(step, pf, prices_fc, prices_gt, tradability, net_fn: Seq2SeqPoli
     
     profit = torch.zeros([batch_size], device=pf.device)
     new_pf = pf.clone()
+    
+    reg = 0
+    
     for date in range(seq_len - 1):
         # Sell
         assets_trade = new_pf[:, 1:] * sell[:, date]
@@ -72,6 +75,7 @@ def run_network(step, pf, prices_fc, prices_gt, tradability, net_fn: Seq2SeqPoli
         # gamma *= gamma
         new_value = new_pf[:, 0] + (new_pf[:, 1:] * prices_gt[:, date + 1]).sum(-1)
         profit = profit + (new_value - init_value) * gamma
+        reg = reg + (sell * buy[..., 1:]).sum(-1).sum(-1).sum(-1)
         
         if plot_trade:
             plot = {
@@ -89,9 +93,9 @@ def run_network(step, pf, prices_fc, prices_gt, tradability, net_fn: Seq2SeqPoli
         
         
     if ret_pf:
-        return profit, new_value - init_value, new_value, new_pf
+        return profit, new_value - init_value, new_value, new_pf, reg
     else:
-        return profit, new_value - init_value
+        return profit, new_value - init_value, reg
 
 
 def e2e_run(args, net, plot_trade=True, mode='gt', writer=None):
@@ -126,7 +130,7 @@ def e2e_run(args, net, plot_trade=True, mode='gt', writer=None):
             prices_gt = prices_gt.unsqueeze(0)
             
             # _, new_value, pf = run_network(step, pf,
-            reward, profit, new_value, pf = run_network(step, pf,
+            reward, profit, new_value, pf, reg = run_network(step, pf,
                                  prices_fc, prices_gt, tradability[:, step:step+args.seq_len],
                                 #  prices[:, step:step+args.seq_len], tradability[:, step:step+args.seq_len],
                                  net, costs=costs, gamma=args.profit_discount,
@@ -222,10 +226,10 @@ def get(args, writer=None, sd_filename=None):
                 # price_seq = prices[step:step+args.seq_len].unsqueeze(0).tile((args.batch_size, 1, 1))
                 # tdblt_seq = tradability[step:step+args.seq_len].unsqueeze(0).tile((args.batch_size, 1, 1))
                 
-                reward, profit = run_network(step, init_pf, price_seq, price_seq, tdblt_seq, net, costs=costs, gamma=args.profit_discount, plot_trade=False, writer=writer)
+                reward, profit, reg = run_network(step, init_pf, price_seq, price_seq, tdblt_seq, net, costs=costs, gamma=args.profit_discount, plot_trade=False, writer=writer)
                 
                 optimizer.zero_grad()
-                loss = - ((reward + profit).sum(-1) + (profit.mean() / profit.std()))
+                loss = reg - ((reward + profit).sum(-1) + (profit.mean() / profit.std()))
                           
                 epsilon = torch.rand(1)
                 if epsilon < 0.4 * np.exp(-0.5 * epoch):
@@ -266,12 +270,12 @@ def parse_arguments():
     parser.add_argument("--seq_stripe", default=False, type=bool, help="Whether or not use seq_len as action stripe size")
     
     # Data
-    parser.add_argument("--seq_len", default=8, type=int, help="Length of sequence")
+    parser.add_argument("--seq_len", default=32, type=int, help="Length of sequence")
     parser.add_argument("--real_data_path", default="data/data.csv", type=str, help="Path of data")
     parser.add_argument("--data_path", default="data/data_gen.csv", type=str, help="Path of data")
     
     # Computation
-    parser.add_argument("--epoch", default=40, type=int, help="Epochs")
+    parser.add_argument("--epoch", default=20, type=int, help="Epochs")
     parser.add_argument("--batch_size", default=4, type=int, help="Batch size")
     parser.add_argument("--steps", default=256, type=int, help="Batch size")
     parser.add_argument("--device", default="cuda", type=str, help="Device of computation")
@@ -302,19 +306,25 @@ if __name__ == '__main__':
     args = parse_arguments()
     
     args.seq_stripe = False
-    args.force_retrain = False
+    args.force_retrain = True
     
     writer=SummaryWriter(args.summary_log_dir)
     
+    # Select:
     # max_profit = 1000.
     # for test_idx in range(10):
     #     sd_filename = os.path.join("data", "trader", f"{args.seq_len}_{ args.seq_encode_mode }_{ 'cons' if args.consider_tradability else 'ignr' }_{ args.epoch }_{ test_idx }.pt")
     #     net = get(args, writer)
+    #     args.real_data_path = "data/data_gen.csv"
     #     with torch.no_grad():
     #         profit = e2e_run(args, net, plot_trade=True, mode='gt', writer=writer)
     #         if profit > max_profit:
     #             max_profit = profit
     #             print("Better network, saving...")
     #             torch.save(net.state_dict(), sd_filename)
-    net = get(args, writer, sd_filename="data/trader/8_delta_ignr_40_5.pt")
+                
+    # Validate:
+    args.real_data_path = "data/data.csv"
+    net = get(args, writer)
     profit = e2e_run(args, net, plot_trade=True, mode='ema', writer=writer)
+    
