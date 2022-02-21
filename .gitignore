@@ -6,6 +6,7 @@ runs/
 
 # Training data
 data/trader/*
+data/trading/*
 
 # Thirdparty libs
 thirdparty/*
