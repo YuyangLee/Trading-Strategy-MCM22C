@@ -199,13 +199,16 @@ def get(args, writer=None, sd_filename=None):
         tradability = sample_tradability(num_days, num_assets, indices=[-1], rate=0.2)
         
         net.train()
-        
+        prof_traj = []
         costs = torch.from_numpy(np.asarray([args.cost_trans[asset] for asset in args.assets])).to(args.device).unsqueeze(0)
         for epoch in range(args.epoch):
+            if epoch % 10 == 0:
+                prof_traj.append(e2e_run(args, net, plot_trade=True, mode='gt', writer=writer))
+            
             prof_mean = 0
             rewd_mean  = 0
             
-            optimizer = torch.optim.Adam(params=net.parameters(), lr=1e-3*(0.999**epoch))
+            optimizer = torch.optim.Adam(params=net.parameters(), lr=1e-3*(0.97**epoch))
             for step in trange(args.steps):
                 # B x seq_len x num_assets
                 # prices, tradability = seq_slide_select(seq, args.seq_len, require_tradability=True, tradability_assets=[-1])
@@ -229,24 +232,28 @@ def get(args, writer=None, sd_filename=None):
                 reward, profit, reg = run_network(step, init_pf, price_seq, price_seq, tdblt_seq, net, costs=costs, gamma=args.profit_discount, plot_trade=False, writer=writer)
                 
                 optimizer.zero_grad()
-                loss = reg - ((reward + profit).sum(-1) + (profit.mean() / profit.std()))
+                loss = - ((profit).sum(-1) + (profit.mean() / profit.std()))
+                # loss = 10.0 * reg - ((profit).sum(-1) + (profit.mean() / profit.std()))
+                # loss = 10.0 * reg - ((reward + 2.0 * profit).sum(-1) + 10.0 * (profit.mean() / profit.std()))
                           
                 epsilon = torch.rand(1)
                 if epsilon < 0.4 * np.exp(-0.5 * epoch):
                     loss = - loss * torch.rand(1).cuda()
                     
                 loss.backward()
+                
                 optimizer.step()
                 
-                rewd_mean  += reward.sum(-1).detach()
+                rewd_mean += reward.sum(-1).detach()
                 prof_mean += profit.sum(-1).detach()
         
             tqdm.write(f"Epoch #{ epoch }: Ave. profit { ( prof_mean / args.steps ).item() } Ave. reward { ( rewd_mean / args.steps ).item() }")
             
-        # torch.save(net.state_dict(), sd_filename)
+        torch.save(net.state_dict(), sd_filename)
     else:
         net.load_state_dict(torch.load(sd_filename))
         
+    # print(prof_traj)
     return net
     
 def parse_arguments():
@@ -256,7 +263,7 @@ def parse_arguments():
     parser.add_argument("--assets", default=['btc', 'gold'], type=list, help="Assets available for trading")
     parser.add_argument("--cost_trans", default={'btc': 0.02, 'gold': 0.01}, type=dict, help="Cost of transection of given assets")
     parser.add_argument("--initial_cash", default=1000.0, type=float, help="Default amount of cash")
-    parser.add_argument("--profit_discount", default=0.98, type=float, help="Discount of profit computation")
+    parser.add_argument("--profit_discount", default=0.95, type=float, help="Discount of profit computation")
     
     # Trader
     parser.add_argument("--output_daily", default=False, type=bool, help="Whether or not only predict daily action")
@@ -270,14 +277,14 @@ def parse_arguments():
     parser.add_argument("--seq_stripe", default=False, type=bool, help="Whether or not use seq_len as action stripe size")
     
     # Data
-    parser.add_argument("--seq_len", default=32, type=int, help="Length of sequence")
+    parser.add_argument("--seq_len", default=4, type=int, help="Length of sequence")
     parser.add_argument("--real_data_path", default="data/data.csv", type=str, help="Path of data")
     parser.add_argument("--data_path", default="data/data_gen.csv", type=str, help="Path of data")
     
     # Computation
-    parser.add_argument("--epoch", default=20, type=int, help="Epochs")
-    parser.add_argument("--batch_size", default=4, type=int, help="Batch size")
-    parser.add_argument("--steps", default=256, type=int, help="Batch size")
+    parser.add_argument("--epoch", default=80, type=int, help="Epochs")
+    parser.add_argument("--batch_size", default=16, type=int, help="Batch size")
+    parser.add_argument("--steps", default=512, type=int, help="Batch size")
     parser.add_argument("--device", default="cuda", type=str, help="Device of computation")
     
     # Debug
@@ -306,7 +313,7 @@ if __name__ == '__main__':
     args = parse_arguments()
     
     args.seq_stripe = False
-    args.force_retrain = True
+    args.force_retrain = False
     
     writer=SummaryWriter(args.summary_log_dir)
     
@@ -324,7 +331,8 @@ if __name__ == '__main__':
     #             torch.save(net.state_dict(), sd_filename)
                 
     # Validate:
-    args.real_data_path = "data/data.csv"
+    # args.real_data_path = "data/data.csv"
+    
     net = get(args, writer)
     profit = e2e_run(args, net, plot_trade=True, mode='ema', writer=writer)
     
