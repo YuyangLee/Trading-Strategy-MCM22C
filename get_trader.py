@@ -94,7 +94,7 @@ def run_network(step, pf, prices_fc, prices_gt, tradability, net_fn: Seq2SeqPoli
         return profit, new_value - init_value
 
 
-def e2e_run(args, net, plot_trade=True, writer=None):
+def e2e_run(args, net, plot_trade=True, mode='gt', writer=None):
     prices, tradability = get_data(args.real_data_path, args.device)
     
     batch_size = 1
@@ -121,7 +121,7 @@ def e2e_run(args, net, plot_trade=True, writer=None):
         prof = 0
         for step in tqdm(np.arange(args.initial_waiting, num_days, args.seq_len - 1)):
             # TODO: Change this
-            prices_fc, prices_gt = forecaster.forecast(step, args.seq_len, mode='stat', padding=True)
+            prices_fc, prices_gt = forecaster.forecast(step, args.seq_len, mode=mode, padding=True)
             prices_fc = prices_fc.unsqueeze(0)
             prices_gt = prices_gt.unsqueeze(0)
             
@@ -136,7 +136,7 @@ def e2e_run(args, net, plot_trade=True, writer=None):
         # new_value = new_value.sum(-1)
     else:
         for step in trange(args.initial_waiting, num_days):
-            prices_fc, prices_gt = forecaster.forecast(step, args.seq_len, mode='ema', padding=True)
+            prices_fc, prices_gt = forecaster.forecast(step, args.seq_len, mode=mode, padding=True)
             prices_fc = prices_fc.unsqueeze(0)
             prices_gt = prices_gt.unsqueeze(0)
             
@@ -176,10 +176,13 @@ def e2e_run(args, net, plot_trade=True, writer=None):
 Value: { new_value.item() } with profit { new_value.item() - init_value }
 ================================
           """)
+    
+    return new_value.item()
         
-def get(args, writer=None): 
+def get(args, writer=None, sd_filename=None): 
     net = Seq2SeqPolicy(len(args.assets), args.seq_len, consider_tradability=args.consider_tradability, seq_mode=args.seq_encode_mode, output_daily=args.output_daily, device=args.device)
-    sd_filename = os.path.join("data", "trader", f"{args.seq_len}_{ args.seq_encode_mode }_{ 'cons' if args.consider_tradability else 'ignr' }_{ args.epoch }.pt")
+    if sd_filename is None:
+        sd_filename = os.path.join("data", "trader", f"{args.seq_len}_{ args.seq_encode_mode }_{ 'cons' if args.consider_tradability else 'ignr' }_{ args.epoch }.pt")
     
     if args.force_retrain or not os.path.isfile(sd_filename):
         prices, tradability = get_data(args.data_path, args.device, sample_tradability=True, untradability_assets=[-1])
@@ -236,7 +239,7 @@ def get(args, writer=None):
         
             tqdm.write(f"Epoch #{ epoch }: Ave. profit { ( prof_mean / args.steps ).item() } Ave. reward { ( rewd_mean / args.steps ).item() }")
             
-        torch.save(net.state_dict(), sd_filename)
+        # torch.save(net.state_dict(), sd_filename)
     else:
         net.load_state_dict(torch.load(sd_filename))
         
@@ -263,7 +266,7 @@ def parse_arguments():
     parser.add_argument("--seq_stripe", default=False, type=bool, help="Whether or not use seq_len as action stripe size")
     
     # Data
-    parser.add_argument("--seq_len", default=16, type=int, help="Length of sequence")
+    parser.add_argument("--seq_len", default=8, type=int, help="Length of sequence")
     parser.add_argument("--real_data_path", default="data/data.csv", type=str, help="Path of data")
     parser.add_argument("--data_path", default="data/data_gen.csv", type=str, help="Path of data")
     
@@ -302,8 +305,16 @@ if __name__ == '__main__':
     args.force_retrain = False
     
     writer=SummaryWriter(args.summary_log_dir)
-    net = get(args, writer)
     
-    with torch.no_grad():
-        e2e_run(args, net, plot_trade=True, writer=writer)
-    
+    # max_profit = 1000.
+    # for test_idx in range(10):
+    #     sd_filename = os.path.join("data", "trader", f"{args.seq_len}_{ args.seq_encode_mode }_{ 'cons' if args.consider_tradability else 'ignr' }_{ args.epoch }_{ test_idx }.pt")
+    #     net = get(args, writer)
+    #     with torch.no_grad():
+    #         profit = e2e_run(args, net, plot_trade=True, mode='gt', writer=writer)
+    #         if profit > max_profit:
+    #             max_profit = profit
+    #             print("Better network, saving...")
+    #             torch.save(net.state_dict(), sd_filename)
+    net = get(args, writer, sd_filename="data/trader/8_delta_ignr_40_5.pt")
+    profit = e2e_run(args, net, plot_trade=True, mode='ema', writer=writer)

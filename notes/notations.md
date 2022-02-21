@@ -10,7 +10,7 @@
 
 - **Trade (in) amount** of <ins>B</ins>TC and <ins>g</ins>old: $\mathbf{s}_t = \begin{bmatrix} s_{b, t} & s_{g, t} \end{bmatrix}^T$
 
-- **Discount of transection**: $\gamma = \begin{bmatrix} \gamma_b & \gamma_g \end{bmatrix}^T = 1 - \begin{bmatrix} \alpha_b & \alpha_g \end{bmatrix}^T$
+- **Discount of transaction**: $\gamma = \begin{bmatrix} \gamma_b & \gamma_g \end{bmatrix}^T = 1 - \begin{bmatrix} \alpha_b & \alpha_g \end{bmatrix}^T$
   - as assumed $\gamma = \begin{bmatrix} \gamma_b & \gamma_g \end{bmatrix}^T = \begin{bmatrix} 0.98 & 0.99 \end{bmatrix}^T$ 
 
 - **Tradability indicator** for gold: $\tau_t = \left\{ \begin{matrix} 1 & \mathrm{day\ } t \mathrm{\ is\ tradable} \\ 0 & \mathrm{else} \end{matrix} \right.$ 
@@ -41,7 +41,7 @@ where $\phi(\cdot)$ flattens its input into a $1-$ dimentional vector.
 
 The sequence is predicted with a prices sequence in the past.
 
-The actor determines the action $a_t = \begin{bmatrix} \Delta \mathbf{a}_t \end{bmatrix} \in \R^{2l+3}$ as the trading amount (positive for buying, negative for selling) of the assets, therefore
+The actor determines the action $a_t = \begin{bmatrix} \Delta \mathbf{a}_t \end{bmatrix} \in \R^{2+3}$ as the trading amount (positive for buying, negative for selling) of the assets, therefore
 
 $$
 s_{t+1} = s_t + \begin{bmatrix} - \gamma^{-1} \cdot \Delta \mathbf{a}_t & \Delta \mathbf{a}_t \end{bmatrix}
