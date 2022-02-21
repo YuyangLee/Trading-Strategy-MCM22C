@@ -146,8 +146,8 @@ def get(args, writer=None, sd_filename=None):
         sd_filename = os.path.join("data", "trader", f"{args.seq_len}_{ args.seq_encode_mode }_{ 'cons' if args.consider_tradability else 'ignr' }_{ args.epoch }.pt")
     
     if args.force_retrain or not os.path.isfile(sd_filename):
-        prices, tradability = get_data(args.data_path, args.device, sample_tradability=True, untradability_assets=[-1])
-        # prices_orig = prices_orig / 10 + 200 + 500 * torch.rand((1)).to(args.device)
+        prices, tradability = get_data(args.data_path, args.device, sample_tradability=False, untradability_assets=[-1])
+        prices = prices / 10 + 200 + 500 * torch.rand((1)).to(args.device)
         
         num_days = prices.shape[0]
         num_assets = len(args.assets)
@@ -156,7 +156,7 @@ def get(args, writer=None, sd_filename=None):
         prof_traj = []
         costs = torch.from_numpy(np.asarray([args.cost_trans[asset] for asset in args.assets])).to(args.device).unsqueeze(0)
         for epoch in range(args.epoch):
-            optimizer = torch.optim.SGD(params=net.parameters(), lr=1e-3*(0.98**epoch))
+            optimizer = torch.optim.Adam(params=net.parameters(), lr=(1e-3)*(0.95**epoch))
             for step in trange(args.steps):
                 init_pf = sample_init_pf(args.batch_size, num_assets, ranges=[[0., 20000.], [0., 10.], [0., 200.]], device='cuda')
 
@@ -176,9 +176,9 @@ def get(args, writer=None, sd_filename=None):
                 optimizer.zero_grad()
                 
                 # if epoch < 20:
-                #     loss = - ((reward + 2.0 * acc_gain).sum(-1) + 10.0 * (acc_gain.mean() / acc_gain.std()))
+                # loss = - (reward + acc_gain).sum(-1)
                 # else:
-                loss = - ((reward + acc_gain).sum(-1) + (acc_gain.mean() / acc_gain.std()))
+                loss = - ((reward + acc_gain).sum(-1) + 100 * (acc_gain.mean() / acc_gain.std()))
                 # loss = 10.0 * reg - ((profit).sum(-1) + (profit.mean() / profit.std()))
                           
                 epsilon = torch.rand(1)
@@ -188,7 +188,7 @@ def get(args, writer=None, sd_filename=None):
                 loss.backward()
                 optimizer.step()
                 
-            # tqdm.write(f"Epoch #{ epoch }: Ave. accumulative gain { ( prof_mean / args.steps ).item() } Ave. reward { ( rewd_mean / args.steps ).item() }")
+            tqdm.write(f"Epoch #{ epoch }: Reward { reward.mean().item() }")
             
         torch.save(net.state_dict(), sd_filename)
     else:
@@ -210,7 +210,7 @@ def parse_arguments():
     parser.add_argument("--output_daily", default=False, type=bool, help="Whether or not only predict daily action")
     parser.add_argument("--force_retrain", default=False, type=bool, help="Whether or not forcely retrain the agent")
     parser.add_argument("--consider_tradability", default=False, type=bool, help="Whether or not feed tradability into the network")
-    parser.add_argument("--seq_encode_mode", default="delta", type=str,
+    parser.add_argument("--seq_encode_mode", default="deri-1", type=str,
                         help="Mode of encoding price sequence: ['deri-1', 'delta', 'gru']")
     
     # E2E Trading
@@ -223,7 +223,7 @@ def parse_arguments():
     parser.add_argument("--data_path", default="data/data_gen.csv", type=str, help="Path of data")
     
     # Computation
-    parser.add_argument("--epoch", default=20, type=int, help="Epochs")
+    parser.add_argument("--epoch", default=50, type=int, help="Epochs")
     parser.add_argument("--batch_size", default=4, type=int, help="Batch size")
     parser.add_argument("--steps", default=512, type=int, help="Batch size")
     parser.add_argument("--device", default="cuda", type=str, help="Device of computation")
@@ -254,14 +254,14 @@ if __name__ == '__main__':
     args = parse_arguments()
     
     args.seq_stripe = False
-    args.force_retrain = True
+    args.force_retrain = False
     
     writer=SummaryWriter(args.summary_log_dir)
 
     # Validate:
-    args.real_data_path = "data/data.csv"
-    args.file_path = 'data/data.csv'
-    args.seq_file_path = 'data/data.csv'
+    # args.real_data_path = "data/data.csv"
+    # args.file_path = 'data/data.csv'
+    # args.seq_file_path = 'data/data.csv'
     
     net = get(args, writer)
     mode = 'gt'
